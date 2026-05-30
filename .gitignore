@@ -1,0 +1,53 @@
+# Secrets & local config
+.env
+.env.local
+.env.*.local
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# Node / Next
+node_modules/
+.next/
+.turbo/
+dist/
+build/
+.eslintcache
+*.tsbuildinfo
+
+# Databases / runtime data
+*.sqlite
+*.sqlite3
+*.db
+apps/api/storage/
+
+# Test artifacts
+.coverage
+htmlcov/
+coverage/
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Personal scratch (writer's own drafts, not part of the codebase)
+story-so-far.md
+
+# DB backups / sqlite side-files
+*.db.bak*
+*.db-*
+*.sqlite-*

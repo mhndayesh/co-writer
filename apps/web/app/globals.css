@@ -1,0 +1,111 @@
+@import url("https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;0,500;0,600;1,400&family=Playfair+Display:wght@500;700&display=swap");
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Theme palettes as CSS variables ─────────────────────────────────────────
+   Light = warm cream + dark ink (default before JS runs).
+   Dark  = the original Story Forge palette (burnt sienna + gold on near-black).
+   Components reference these via the Tailwind color names (bg-ink-bg, etc.). */
+
+:root {
+  color-scheme: light;
+  --ink-bg: 250 247 239;
+  --ink-surface: 255 252 245;
+  --ink-surface2: 245 240 227;
+  --ink-surface3: 236 229 211;
+  --ink-border: 217 207 182;
+  --ink-borderLight: 201 189 159;
+  --ink-text: 43 32 24;
+  --ink-text2: 106 90 69;
+  --ink-text3: 142 126 102;
+  --ink-gold: 168 120 11;
+  --ink-goldLight: 200 144 16;
+  --ink-red: 138 42 26;
+  --ink-green: 45 85 48;
+  --ink-rose: 139 74 92;
+  --ink-deep: 6 4 2;
+}
+
+.dark {
+  color-scheme: dark;
+  --ink-bg: 10 8 6;
+  --ink-surface: 21 16 9;
+  --ink-surface2: 28 22 16;
+  --ink-surface3: 35 25 14;
+  --ink-border: 42 32 22;
+  --ink-borderLight: 52 42 26;
+  --ink-text: 232 220 200;
+  --ink-text2: 154 132 104;
+  --ink-text3: 84 71 58;
+  --ink-gold: 200 152 48;
+  --ink-goldLight: 216 170 64;
+  --ink-red: 179 69 53;
+  --ink-green: 61 107 65;
+  --ink-rose: 179 102 122;
+  --ink-deep: 6 4 2;
+}
+
+html, body {
+  background: rgb(var(--ink-bg));
+  color: rgb(var(--ink-text));
+  font-family: "Lora", Georgia, serif;
+  min-height: 100vh;
+}
+
+h1, h2, h3, h4 { font-family: "Playfair Display", "Lora", serif; }
+
+::selection { background: rgb(var(--ink-gold) / 0.35); color: rgb(var(--ink-deep)); }
+
+input, textarea, select {
+  background: rgb(var(--ink-surface));
+  color: rgb(var(--ink-text));
+  border: 1px solid rgb(var(--ink-border));
+}
+input:focus, textarea:focus, select:focus {
+  outline: none;
+  border-color: rgb(var(--ink-gold));
+  box-shadow: 0 0 0 1px rgb(var(--ink-gold) / 0.4);
+}
+
+button { font-family: inherit; }
+
+@keyframes busy-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+.busy-fade-in { animation: busy-fade-in 180ms ease-out; }
+
+.scrollbar-thin::-webkit-scrollbar { width: 8px; height: 8px; }
+.scrollbar-thin::-webkit-scrollbar-thumb { background: rgb(var(--ink-border)); border-radius: 4px; }
+.scrollbar-thin::-webkit-scrollbar-thumb:hover { background: rgb(var(--ink-borderLight)); }
+
+@layer components {
+  .card-ink {
+    @apply bg-ink-surface border border-ink-border rounded-md shadow-ink;
+  }
+  .btn {
+    @apply inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium transition-colors;
+    @apply bg-ink-surface2 border border-ink-border text-ink-text hover:border-ink-gold hover:text-ink-goldLight;
+  }
+  .btn-primary {
+    background: rgb(var(--ink-gold));
+    color: rgb(var(--ink-deep));
+    border: 1px solid rgb(var(--ink-gold));
+  }
+  .btn-primary:hover {
+    background: rgb(var(--ink-goldLight));
+    border-color: rgb(var(--ink-goldLight));
+    color: rgb(var(--ink-deep));
+  }
+  .dark .btn-primary { color: #060402; }
+  .btn-ghost {
+    @apply bg-transparent border-transparent text-ink-text2 hover:text-ink-goldLight;
+  }
+  .input {
+    @apply w-full rounded-md px-3 py-2 text-sm;
+  }
+  .label {
+    @apply text-xs uppercase tracking-wider text-ink-text2 mb-1.5 block;
+  }
+}
