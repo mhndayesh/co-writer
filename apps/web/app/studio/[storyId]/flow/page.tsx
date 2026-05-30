@@ -2,12 +2,12 @@
 import { useParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Sparkles, Check, MessageSquarePlus, X, BookOpen } from "lucide-react";
+import { Sparkles, Check, MessageSquarePlus, X, BookOpen, Languages } from "lucide-react";
 import * as api from "@/lib/api";
 import { Btn, Card, FG, Inp, PageHdr, Ta, Tag } from "@/components/ui/Primitives";
 import { useDebouncedSave } from "@/lib/debounce";
 
-type Phase = "writing" | "polishing" | "reviewing" | "extracting" | "done";
+type Phase = "writing" | "polishing" | "reviewing" | "extracting" | "enhancing" | "done";
 
 export default function FlowPage() {
   const { storyId } = useParams<{ storyId: string }>();
@@ -20,6 +20,8 @@ export default function FlowPage() {
   const [phase, setPhase] = useState<Phase>("writing");
   const [chapterTitle, setChapterTitle] = useState("");
   const [chapterSummary, setChapterSummary] = useState("");
+  const [enhancerOn, setEnhancerOn] = useState(false);
+  const [enhancement, setEnhancement] = useState<{ language: string; enhanced: string; notes: string } | null>(null);
 
   const { data: draft } = useQuery({ queryKey: ["flow-draft", storyId], queryFn: () => api.flowGetDraft(storyId) });
   const { data: existingChapters } = useQuery({ queryKey: ["chapters", storyId], queryFn: () => api.listChapters(storyId) });
@@ -114,12 +116,20 @@ export default function FlowPage() {
     onError: () => setPhase("reviewing"),
   });
 
+  const enhance = useMutation({
+    mutationKey: ["llm", "flow.enhance"],
+    mutationFn: () => api.flowEnhance(storyId, raw),
+    onMutate: () => setPhase("enhancing"),
+    onSuccess: (r) => { setEnhancement(r); },
+    onError: () => setPhase("writing"),
+  });
+
   // Skip AI polish entirely: use the raw text as-is and jump straight to extract.
-  // The chapter content saved on approve will be the writer's own words verbatim.
+  // If the language enhancer is on, run enhancement first.
   const skipPolish = useMutation({
     mutationKey: ["llm", "flow.skip-polish"],
-    mutationFn: () => api.flowExtract(storyId, raw),
-    onMutate: () => { setPolished(raw); setPhase("extracting"); },
+    mutationFn: (text: string) => api.flowExtract(storyId, text),
+    onMutate: (text) => { setPolished(text); setPhase("extracting"); },
     onSuccess: (r) => {
       setExtracted(r);
       setChapterTitle(r.title_suggestion || "");
@@ -128,6 +138,15 @@ export default function FlowPage() {
     },
     onError: () => setPhase("writing"),
   });
+
+  function handleUseAsIs() {
+    if (enhancerOn) {
+      setEnhancement(null);
+      enhance.mutate();
+    } else {
+      skipPolish.mutate(raw);
+    }
+  }
 
   const approve = useMutation({
     mutationKey: ["llm", "flow.approve"],
@@ -148,6 +167,11 @@ export default function FlowPage() {
       qc.invalidateQueries({ queryKey: ["world", storyId] });
       qc.invalidateQueries({ queryKey: ["factions", storyId] });
       qc.invalidateQueries({ queryKey: ["threads", storyId] });
+      qc.invalidateQueries({ queryKey: ["scenes", storyId] });
+      qc.invalidateQueries({ queryKey: ["timeline", storyId] });
+      qc.invalidateQueries({ queryKey: ["weave", storyId] });
+      qc.invalidateQueries({ queryKey: ["revelations", storyId] });
+      qc.invalidateQueries({ queryKey: ["voice", storyId] });
       qc.invalidateQueries({ queryKey: ["graph", storyId] });
       // Reset for the next scene; let the gap-detector pick the new default target
       setRaw(""); setPolished(""); setNotes(""); setExtracted(null);
@@ -159,8 +183,8 @@ export default function FlowPage() {
 
   function reset() {
     setRaw(""); setPolished(""); setExtracted(null); setNotes(""); setPhase("writing");
-    setChapterTitle(""); setChapterSummary("");
-    polish.reset(); extract.reset(); skipPolish.reset();
+    setChapterTitle(""); setChapterSummary(""); setEnhancement(null);
+    polish.reset(); extract.reset(); skipPolish.reset(); enhance.reset();
     // Also clear the server-side draft so the next Flow Writing visit starts blank.
     api.flowClearDraft(storyId).catch(() => {});
     qc.invalidateQueries({ queryKey: ["flow-draft", storyId] });
@@ -245,18 +269,30 @@ export default function FlowPage() {
                     : "Pick up where you left off…"}
                   className="text-base leading-relaxed" />
             </FG>
-            <div className="flex justify-between items-center gap-2 mt-2">
-              <Btn
-                variant="ghost"
-                disabled={!raw.trim() || polish.isPending || skipPolish.isPending}
-                onClick={() => skipPolish.mutate()}
-                title="Skip the AI rewrite. Your words are kept as-is; the AI just files characters/places/themes."
-              >
-                {skipPolish.isPending ? "Filing…" : "Use my writing as-is →"}
-              </Btn>
+            <div className="flex justify-between items-center gap-2 mt-3 flex-wrap">
+              <div className="flex items-center gap-3">
+                <Btn
+                  variant="ghost"
+                  disabled={!raw.trim() || polish.isPending || skipPolish.isPending || enhance.isPending}
+                  onClick={handleUseAsIs}
+                  title="Keep your words as-is. The AI files characters, places, threads, scene cards, and revelations. If the language enhancer is on, it checks the language first."
+                >
+                  {(skipPolish.isPending || enhance.isPending) ? "Working…" : "Use my writing as-is →"}
+                </Btn>
+                <label className="flex items-center gap-1.5 cursor-pointer select-none text-xs text-ink-text2" title="Detect the language and suggest language-only improvements (grammar, word choice, flow) without changing the story. You decide whether to apply them.">
+                  <Languages size={13} className={enhancerOn ? "text-ink-gold" : "text-ink-text3"} />
+                  <span className={enhancerOn ? "text-ink-goldLight" : ""}>Language enhancer</span>
+                  <div
+                    onClick={() => setEnhancerOn(v => !v)}
+                    className={`relative w-8 h-4 rounded-full transition-colors cursor-pointer ${enhancerOn ? "bg-ink-gold" : "bg-ink-surface3 border border-ink-border"}`}
+                  >
+                    <div className={`absolute top-0.5 w-3 h-3 rounded-full bg-white shadow transition-all ${enhancerOn ? "left-4" : "left-0.5"}`} />
+                  </div>
+                </label>
+              </div>
               <Btn
                 variant="primary"
-                disabled={!raw.trim() || polish.isPending || skipPolish.isPending}
+                disabled={!raw.trim() || polish.isPending || skipPolish.isPending || enhance.isPending}
                 onClick={() => polish.mutate()}
               >
                 <Sparkles size={14}/> {polish.isPending ? "Shaping…" : "Shape this into a scene →"}
@@ -264,6 +300,47 @@ export default function FlowPage() {
             </div>
           </Card>
         </>
+      )}
+
+      {phase === "enhancing" && (
+        <Card className="mb-4">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="font-display text-lg flex items-center gap-2">
+              <Languages size={16} className="text-ink-gold" /> Language enhancer
+              {enhancement?.language && <span className="text-sm font-normal text-ink-text2">· detected: {enhancement.language}</span>}
+            </h2>
+            <Btn variant="ghost" onClick={() => { setPhase("writing"); setEnhancement(null); }}><X size={14}/> Back</Btn>
+          </div>
+
+          {!enhancement ? (
+            <p className="text-sm text-ink-text2">Checking your writing…</p>
+          ) : (
+            <>
+              {enhancement.notes && (
+                <p className="text-xs text-ink-text2 mb-3 italic">{enhancement.notes}</p>
+              )}
+              <div className="rounded border border-ink-border bg-ink-surface2/60 p-3 mb-4 max-h-72 overflow-y-auto scrollbar-thin">
+                <pre className="whitespace-pre-wrap text-sm leading-relaxed text-ink-text">{enhancement.enhanced}</pre>
+              </div>
+              <div className="flex gap-2 justify-end">
+                <Btn
+                  variant="ghost"
+                  disabled={skipPolish.isPending}
+                  onClick={() => skipPolish.mutate(raw)}
+                >
+                  Ignore & keep my original →
+                </Btn>
+                <Btn
+                  variant="primary"
+                  disabled={skipPolish.isPending}
+                  onClick={() => { setRaw(enhancement.enhanced); skipPolish.mutate(enhancement.enhanced); }}
+                >
+                  <Check size={14}/> {skipPolish.isPending ? "Filing…" : "Apply & continue →"}
+                </Btn>
+              </div>
+            </>
+          )}
+        </Card>
       )}
 
       {(phase === "reviewing" || phase === "extracting") && (
@@ -308,11 +385,19 @@ export default function FlowPage() {
               {nextChapterNumber > 1 && <span className="text-sm text-ink-text2 font-normal ml-2">· will be added to your existing cast, world, and threads</span>}
             </h2>
             {extracted.fallback && (
-              <div className="mb-3 p-2 border border-ink-red/40 bg-ink-red/10 rounded text-xs text-ink-red">
-                ⚠ Fallback mode: the LLM call failed (often a thinking-model issue or LM Studio rejecting <code>response_format</code>). Nothing was auto-extracted. Approving will still save the polished prose as a new chapter — just without any character/theme additions.
+              <div className="mb-3 p-3 border border-ink-red/40 bg-ink-red/10 rounded text-sm text-ink-red space-y-2">
+                <p className="font-semibold">⚠ Extraction failed — LM Studio returned an error.</p>
+                <p className="text-xs opacity-90">The model rejected the request. Most likely cause: the scene + story context exceeded the model's context window. Check LM Studio's console for the specific error, then switch to a model with a larger context window and re-run.</p>
+                <button
+                  className="text-xs underline opacity-80 hover:opacity-100"
+                  onClick={() => extract.mutate()}
+                  disabled={extract.isPending}
+                >
+                  {extract.isPending ? "Re-running…" : "Re-run extraction →"}
+                </button>
               </div>
             )}
-            <p className="text-sm text-ink-text2 mb-4">Tick the new characters to add to your cast. Themes and locations are added automatically.</p>
+            <p className="text-sm text-ink-text2 mb-4">New characters, themes, locations, threads, scene cards, and revelations are filed automatically when you approve.</p>
 
             <div className="grid gap-4 md:grid-cols-2">
               <FG label="Chapter title"><Inp value={chapterTitle} onChange={e => setChapterTitle(e.target.value)} /></FG>
@@ -391,6 +476,39 @@ export default function FlowPage() {
                 <ul className="space-y-1 text-sm">
                   {extracted.threads.map((t: any, i: number) => (<li key={i}>• <strong>{t.name}</strong> <Tag color={t.status === "paid_off" ? "green" : t.status === "abandoned" ? "muted" : "gold"}>{t.status}</Tag>{t.description && <span className="text-ink-text2"> — {t.description}</span>}</li>))}
                 </ul>
+              </div>
+            )}
+            {(extracted.scenes || []).length > 0 && (
+              <div className="mb-3">
+                <h3 className="label">Scene cards</h3>
+                <div className="space-y-2">
+                  {extracted.scenes.map((s: any, i: number) => (
+                    <div key={i} className="rounded border border-ink-border bg-ink-surface2/60 p-3">
+                      <div className="flex flex-wrap items-center gap-2 mb-1">
+                        <Tag color="muted">Scene {s.ordinal || i + 1}</Tag>
+                        <strong>{s.title || s.beat || "Untitled scene"}</strong>
+                        {s.pov && <Tag color="gold">POV: {s.pov}</Tag>}
+                        {s.location && <Tag color="rose">{s.location}</Tag>}
+                      </div>
+                      {s.summary && <p className="text-sm text-ink-text2">{s.summary}</p>}
+                      {(s.goal || s.conflict || s.outcome) && (
+                        <p className="text-xs text-ink-text3 mt-1">
+                          {[s.goal && `Goal: ${s.goal}`, s.conflict && `Conflict: ${s.conflict}`, s.outcome && `Outcome: ${s.outcome}`].filter(Boolean).join(" · ")}
+                        </p>
+                      )}
+                      {s.sensory_palette && (
+                        <div className="mt-2 flex flex-wrap gap-1">
+                          {Object.entries(s.sensory_palette).map(([sense, value]) => <Tag key={sense} color="muted">{sense} {String(value)}</Tag>)}
+                        </div>
+                      )}
+                      {(s.revelations || []).length > 0 && (
+                        <ul className="mt-2 space-y-1 text-xs text-ink-text2">
+                          {s.revelations.map((r: any, ri: number) => <li key={ri}>• {r.description}</li>)}
+                        </ul>
+                      )}
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
             {(extracted.events || []).length > 0 && (

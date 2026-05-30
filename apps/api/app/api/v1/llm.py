@@ -1,216 +1,177 @@
 from datetime import datetime, timezone
 
 from fastapi import APIRouter
-from sqlalchemy import select
+from sqlalchemy.orm.attributes import flag_modified
 
 from app.core.deps import CurrentUser, DB
 from app.core.errors import envelope_ok
 from app.core.security import encrypt_secret
-from app.db.models import LLMProfile, UserLLMSettings
+from app.db.models import UserLLMSettings
 from app.db.schemas import (
+    LaneConfigOut,
     LLMConfigIn,
     LLMConfigOut,
-    LLMProfileOut,
-    LLMSettingsIn,
-    LLMSettingsOut,
     LLMStatus,
+    ProviderInfo,
 )
-from app.services.llm.factory import (
-    _from_default,
-    _from_profile,
-    get_provider_for_page,
-    get_provider_for_user,
-)
-from app.services.llm.roles import CREATIVE, CUSTOM_TASKS, EMBEDDING, TECHNICAL
+from app.services.llm import factory
+from app.services.llm.presets import PRESETS
+from app.services.llm.roles import EMBEDDING, LANES_ORDER
 
 router = APIRouter()
 
 
 # ── helpers ─────────────────────────────────────────────────────────────
 
-def _settings_out(row: UserLLMSettings | None) -> LLMSettingsOut:
-    if row is None:
-        from app.core.config import get_settings as _gs
-        s = _gs()
-        return LLMSettingsOut(
-            provider=s.llm_provider,
-            base_url=s.lmstudio_base_url if s.llm_provider == "lmstudio" else "",
-            model="", embed_model="", has_api_key=False,
-        )
-    return LLMSettingsOut(
-        provider=row.provider, base_url=row.base_url, model=row.model,
-        embed_model=row.embed_model, has_api_key=bool(row.api_key_ciphertext),
+def _default_lane() -> dict:
+    return factory.default_lane_config()
+
+
+def _lanes(row: UserLLMSettings | None) -> dict:
+    lanes = dict((row.lanes if row and row.lanes else {}) or {})
+    d = _default_lane()
+    for lane in ("creative", "technical", "embedding"):
+        lanes.setdefault(lane, dict(d))
+    return lanes
+
+
+def _lane_out(cfg: dict) -> LaneConfigOut:
+    return LaneConfigOut(
+        provider=cfg.get("provider", ""),
+        base_url=cfg.get("base_url", ""),
+        model=cfg.get("model", ""),
+        embed_model=cfg.get("embed_model", ""),
+        has_api_key=bool(cfg.get("api_key_ciphertext")),
     )
 
 
-def _profile_out_from_default(row: UserLLMSettings | None) -> LLMProfileOut:
-    if row is None:
-        from app.core.config import get_settings as _gs
-        s = _gs()
-        return LLMProfileOut(provider=s.llm_provider, base_url="", model="", embed_model="", has_api_key=False)
-    return LLMProfileOut(
-        provider=row.provider, base_url=row.base_url, model=row.model,
-        embed_model=row.embed_model, has_api_key=bool(row.api_key_ciphertext),
+def _config_out(row: UserLLMSettings | None) -> LLMConfigOut:
+    lanes = _lanes(row)
+    return LLMConfigOut(
+        creative=_lane_out(lanes["creative"]),
+        technical=_lane_out(lanes["technical"]),
+        embedding=_lane_out(lanes["embedding"]),
     )
 
 
-def _profile_out(prof: LLMProfile) -> LLMProfileOut:
-    return LLMProfileOut(
-        provider=prof.provider, base_url=prof.base_url, model=prof.model,
-        embed_model=prof.embed_model, has_api_key=bool(prof.api_key_ciphertext),
-    )
+def _apply_lane(existing: dict, incoming) -> dict:
+    """Merge an incoming LaneConfigIn into the stored lane dict.
+    Blank api_key preserves the existing ciphertext."""
+    out = {
+        "provider": incoming.provider,
+        "base_url": incoming.base_url,
+        "model": incoming.model,
+        "embed_model": incoming.embed_model,
+        "api_key_ciphertext": existing.get("api_key_ciphertext", ""),
+    }
+    if incoming.api_key:
+        out["api_key_ciphertext"] = encrypt_secret(incoming.api_key)
+    return out
 
 
-async def _upsert_default(db, user, payload, *, mode: str | None = None) -> UserLLMSettings:
-    row = await db.get(UserLLMSettings, user.id)
-    if row is None:
-        row = UserLLMSettings(user_id=user.id)
-        db.add(row)
-    if mode is not None:
-        row.mode = mode
-    if payload is not None:
-        row.provider = payload.provider
-        row.base_url = payload.base_url
-        row.model = payload.model
-        row.embed_model = payload.embed_model
-        if payload.api_key:
-            row.api_key_ciphertext = encrypt_secret(payload.api_key)
-    row.updated_at = datetime.now(timezone.utc)
-    return row
-
-
-async def _upsert_profile(db, user, role: str, payload) -> None:
-    prof = (await db.execute(
-        select(LLMProfile).where(LLMProfile.user_id == user.id, LLMProfile.role == role)
-    )).scalar_one_or_none()
-    if prof is None:
-        prof = LLMProfile(user_id=user.id, role=role)
-        db.add(prof)
-    prof.provider = payload.provider
-    prof.base_url = payload.base_url
-    prof.model = payload.model
-    prof.embed_model = payload.embed_model
-    if payload.api_key:
-        prof.api_key_ciphertext = encrypt_secret(payload.api_key)
-    prof.updated_at = datetime.now(timezone.utc)
-
-
-# ── legacy single-profile endpoints (kept for back-compat) ───────────────
-
-@router.get("/settings")
-async def get_settings_endpoint(user: CurrentUser, db: DB):
-    row = await db.get(UserLLMSettings, user.id)
-    return envelope_ok(_settings_out(row).model_dump())
-
-
-@router.put("/settings")
-async def put_settings(payload: LLMSettingsIn, user: CurrentUser, db: DB):
-    row = await _upsert_default(db, user, payload)
-    await db.commit()
-    await db.refresh(row)
-    return envelope_ok(_settings_out(row).model_dump())
-
-
-# ── structured multi-profile config ──────────────────────────────────────
+# ── config ───────────────────────────────────────────────────────────────
 
 @router.get("/config")
 async def get_config(user: CurrentUser, db: DB):
     row = await db.get(UserLLMSettings, user.id)
-    profiles = (await db.execute(
-        select(LLMProfile).where(LLMProfile.user_id == user.id)
-    )).scalars().all()
-    by_role = {p.role: p for p in profiles}
-
-    tasks = {
-        role[len("task:"):]: _profile_out(p)
-        for role, p in by_role.items() if role.startswith("task:")
-    }
-    out = LLMConfigOut(
-        mode=(row.mode if row and row.mode in ("single", "split", "custom") else "single"),
-        default=_profile_out_from_default(row),
-        creative=_profile_out(by_role[CREATIVE]) if CREATIVE in by_role else None,
-        technical=_profile_out(by_role[TECHNICAL]) if TECHNICAL in by_role else None,
-        embedding=_profile_out(by_role[EMBEDDING]) if EMBEDDING in by_role else None,
-        tasks=tasks,
-    )
-    return envelope_ok(out.model_dump())
+    return envelope_ok(_config_out(row).model_dump())
 
 
 @router.put("/config")
 async def put_config(payload: LLMConfigIn, user: CurrentUser, db: DB):
-    await _upsert_default(db, user, payload.default, mode=payload.mode)
-    if payload.creative is not None:
-        await _upsert_profile(db, user, CREATIVE, payload.creative)
-    if payload.technical is not None:
-        await _upsert_profile(db, user, TECHNICAL, payload.technical)
-    if payload.embedding is not None:
-        await _upsert_profile(db, user, EMBEDDING, payload.embedding)
-    for page, prof in (payload.tasks or {}).items():
-        await _upsert_profile(db, user, f"task:{page}", prof)
+    row = await db.get(UserLLMSettings, user.id)
+    if row is None:
+        row = UserLLMSettings(user_id=user.id, lanes={})
+        db.add(row)
+    lanes = _lanes(row)
+    for lane, incoming in (
+        ("creative", payload.creative),
+        ("technical", payload.technical),
+        ("embedding", payload.embedding),
+    ):
+        if incoming is not None:
+            lanes[lane] = _apply_lane(lanes.get(lane, {}), incoming)
+    row.lanes = lanes
+    row.updated_at = datetime.now(timezone.utc)
+    # JSON mutated-in-place needs an explicit flag for SQLAlchemy to persist it.
+    flag_modified(row, "lanes")
     await db.commit()
-    return await get_config(user, db)
+    await db.refresh(row)
+    return envelope_ok(_config_out(row).model_dump())
 
 
-# ── status (per active role) + test ──────────────────────────────────────
+# ── providers (preset metadata for the frontend) ──────────────────────────
 
-async def _status_for(provider, role: str) -> LLMStatus:
-    ok, detail = await provider.ping()
-    return LLMStatus(provider=provider.name, model=provider.default_model, reachable=ok, detail=detail, role=role)
+@router.get("/providers")
+async def providers():
+    out = [
+        ProviderInfo(
+            name=p.name, base_url=p.base_url, default_model=p.default_model,
+            default_embed_model=p.default_embed_model, can_embed=p.can_embed,
+        ).model_dump()
+        for p in PRESETS.values()
+    ]
+    return envelope_ok({"providers": out})
 
+
+# ── status + test ─────────────────────────────────────────────────────────
 
 @router.get("/status")
 async def status(user: CurrentUser, db: DB):
-    """Return reachability for every active role under the current mode."""
-    row = await db.get(UserLLMSettings, user.id)
-    mode = (row.mode if row else "single") or "single"
+    """Reachability per lane."""
     statuses: list[dict] = []
-
-    if mode == "single":
-        prov = await get_provider_for_user(db, user)
-        statuses.append((await _status_for(prov, "default")).model_dump())
-    else:
-        # One representative page per category drives resolution.
-        prov_c = await get_provider_for_page(db, user, "flow.polish")
-        statuses.append((await _status_for(prov_c, "creative")).model_dump())
-        prov_t = await get_provider_for_page(db, user, "flow.extract")
-        statuses.append((await _status_for(prov_t, "technical")).model_dump())
-        from app.services.llm.factory import get_embedding_provider
-        prov_e = await get_embedding_provider(db, user)
-        statuses.append((await _status_for(prov_e, "embedding")).model_dump())
-
-    # Keep a flat top-level field for the legacy sidebar pill (first status).
-    primary = statuses[0]
+    representative = {"creative": "flow.polish", "technical": "flow.extract"}
+    for lane in LANES_ORDER:
+        if lane == EMBEDDING:
+            prov = await factory.get_embedding_provider(db, user)
+        else:
+            prov = await factory.get_provider_for_page(db, user, representative[lane])
+        ok, detail = await prov.ping()
+        statuses.append(
+            LLMStatus(
+                provider=prov.name,
+                model=prov.default_model,
+                reachable=ok,
+                detail=detail,
+                lane=lane,
+            ).model_dump()
+        )
+    primary = statuses[0] if statuses else {
+        "provider": "",
+        "model": "",
+        "reachable": False,
+        "detail": "no config",
+        "lane": "creative",
+    }
     return envelope_ok({**primary, "statuses": statuses})
 
 
 @router.post("/test")
 async def test(payload: dict, user: CurrentUser, db: DB):
-    """Test a profile. payload may include `page` (route via category) or
-    `role` ("default"|"creative"|"technical"|"embedding"|"task:<page>")."""
+    """Test a lane. payload: {lane: creative|technical|embedding, prompt?}."""
     from app.services import llm_service
 
     payload = payload or {}
+    lane = payload.get("lane", "creative")
     prompt = payload.get("prompt", "Say hello in one short sentence.")
-    page = payload.get("page") or payload.get("role") or "llm.test"
 
-    # Embeddings can't chat — ping the embedding provider instead.
-    if page == "embedding":
-        from app.services.llm.factory import get_embedding_provider
-        prov = await get_embedding_provider(db, user)
+    if lane == "embedding":
+        prov = await factory.get_embedding_provider(db, user)
         ok, detail = await prov.ping()
-        return envelope_ok({"text": f"Embedding provider {prov.name}: {'ok' if ok else detail}", "model": prov.default_embed_model, "fallback": False})
+        return envelope_ok({
+            "text": f"Embedding provider {prov.name}: {'ok' if ok else detail}",
+            "model": prov.default_embed_model,
+            "fallback": not ok,
+        })
 
-    # Map a bare role to a representative page so run()'s router picks it up.
-    role_to_page = {"creative": "flow.polish", "technical": "flow.extract", "default": "llm.test"}
-    if page in role_to_page:
-        page = role_to_page[page]
-    elif page.startswith("task:"):
-        page = page[len("task:"):]
-
+    page = "flow.extract" if lane == "technical" else "flow.polish"
     resp, fallback = await llm_service.run(
-        db, user, page=page,
+        db,
+        user,
+        page=page,
         system="You are a helpful assistant. Reply briefly.",
-        user_msg=prompt, max_tokens=200,
+        user_msg=prompt,
+        max_tokens=200,
     )
     await db.commit()
     return envelope_ok({"text": resp.text, "model": resp.model, "fallback": fallback})

@@ -47,36 +47,11 @@ class UserLLMSettings(Base):
     __tablename__ = "user_llm_settings"
 
     user_id: Mapped[str] = mapped_column(String(32), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
-    # Routing mode: single | split | custom. The flat columns below are the
-    # "default" profile — used in single mode and as the universal fallback.
-    mode: Mapped[str] = mapped_column(String(16), default="single")
-    provider: Mapped[str] = mapped_column(String(32), default="lmstudio")
-    base_url: Mapped[str] = mapped_column(String(500), default="")
-    model: Mapped[str] = mapped_column(String(200), default="")
-    embed_model: Mapped[str] = mapped_column(String(200), default="")
-    api_key_ciphertext: Mapped[str] = mapped_column(Text, default="")
+    # Three routing lanes — creative | technical | embedding — each a dict:
+    # {provider, base_url, model, embed_model, api_key_ciphertext}.
+    # "Use one model for everything" = all three lanes set identically.
+    lanes: Mapped[dict] = mapped_column(JSON, default=dict)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
-
-
-class LLMProfile(Base):
-    """A per-role provider config beyond the default in UserLLMSettings.
-
-    role ∈ "creative" | "technical" | "embedding" | "task:<page>"
-    (e.g. "task:flow.polish"). One row per (user, role).
-    """
-    __tablename__ = "llm_profiles"
-
-    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_uuid)
-    user_id: Mapped[str] = mapped_column(String(32), ForeignKey("users.id", ondelete="CASCADE"), index=True)
-    role: Mapped[str] = mapped_column(String(64))
-    provider: Mapped[str] = mapped_column(String(32), default="lmstudio")
-    base_url: Mapped[str] = mapped_column(String(500), default="")
-    model: Mapped[str] = mapped_column(String(200), default="")
-    embed_model: Mapped[str] = mapped_column(String(200), default="")
-    api_key_ciphertext: Mapped[str] = mapped_column(Text, default="")
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
-
-    __table_args__ = (UniqueConstraint("user_id", "role", name="uq_llm_profile_user_role"),)
 
 
 class Story(Base):
@@ -233,7 +208,72 @@ class SceneCard(Base):
     chapter_id: Mapped[str | None] = mapped_column(String(32), ForeignKey("chapters.id", ondelete="CASCADE"), nullable=True)
     ordinal: Mapped[int] = mapped_column(Integer, default=0)
     beat: Mapped[str] = mapped_column(String(120), default="")
+    title: Mapped[str] = mapped_column(String(255), default="")
+    summary: Mapped[str] = mapped_column(Text, default="")
+    goal: Mapped[str] = mapped_column(Text, default="")
+    conflict: Mapped[str] = mapped_column(Text, default="")
+    outcome: Mapped[str] = mapped_column(Text, default="")
+    pov_character_id: Mapped[str | None] = mapped_column(String(32), ForeignKey("characters.id", ondelete="SET NULL"), nullable=True)
+    location_id: Mapped[str | None] = mapped_column(String(32), ForeignKey("locations.id", ondelete="SET NULL"), nullable=True)
+    character_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
+    plot_thread_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
+    time_anchor: Mapped[str] = mapped_column(String(255), default="")
+    time_sort_key: Mapped[float | None] = mapped_column(Float, nullable=True)
+    duration_hint: Mapped[str] = mapped_column(String(120), default="")
+    sensory_palette: Mapped[dict] = mapped_column(JSON, default=dict)
+    source_excerpt: Mapped[str] = mapped_column(Text, default="")
     content: Mapped[str] = mapped_column(Text, default="")
+
+
+class Revelation(Base):
+    __tablename__ = "revelations"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_uuid)
+    story_id: Mapped[str] = mapped_column(String(32), ForeignKey("stories.id", ondelete="CASCADE"), index=True)
+    scene_id: Mapped[str | None] = mapped_column(String(32), ForeignKey("scene_cards.id", ondelete="CASCADE"), nullable=True)
+    chapter_id: Mapped[str | None] = mapped_column(String(32), ForeignKey("chapters.id", ondelete="CASCADE"), nullable=True)
+    description: Mapped[str] = mapped_column(Text, default="")
+    kind: Mapped[str] = mapped_column(String(64), default="revelation")
+    characters_who_know: Mapped[list[str]] = mapped_column(JSON, default=list)
+    reader_knows: Mapped[bool] = mapped_column(Boolean, default=False)
+    notes: Mapped[str] = mapped_column(Text, default="")
+    confidence: Mapped[float] = mapped_column(Float, default=1.0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class PlotThreadSceneLink(Base):
+    __tablename__ = "plot_thread_scene_links"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_uuid)
+    story_id: Mapped[str] = mapped_column(String(32), ForeignKey("stories.id", ondelete="CASCADE"), index=True)
+    thread_id: Mapped[str] = mapped_column(String(32), ForeignKey("plot_threads.id", ondelete="CASCADE"))
+    scene_id: Mapped[str] = mapped_column(String(32), ForeignKey("scene_cards.id", ondelete="CASCADE"))
+    chapter_id: Mapped[str | None] = mapped_column(String(32), ForeignKey("chapters.id", ondelete="CASCADE"), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default="touch")  # touch|setup|turn|payoff
+    strength: Mapped[float] = mapped_column(Float, default=1.0)
+    evidence: Mapped[str] = mapped_column(Text, default="")
+
+    __table_args__ = (UniqueConstraint("story_id", "thread_id", "scene_id", name="uq_thread_scene_link"),)
+
+
+class CharacterVoiceProfile(Base):
+    __tablename__ = "character_voice_profiles"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_uuid)
+    story_id: Mapped[str] = mapped_column(String(32), ForeignKey("stories.id", ondelete="CASCADE"), index=True)
+    character_id: Mapped[str] = mapped_column(String(32), ForeignKey("characters.id", ondelete="CASCADE"))
+    sample_count: Mapped[int] = mapped_column(Integer, default=0)
+    dialogue_words: Mapped[int] = mapped_column(Integer, default=0)
+    avg_sentence_words: Mapped[float] = mapped_column(Float, default=0.0)
+    question_rate: Mapped[float] = mapped_column(Float, default=0.0)
+    exclamation_rate: Mapped[float] = mapped_column(Float, default=0.0)
+    vocabulary_variety: Mapped[float] = mapped_column(Float, default=0.0)
+    dialogue_share: Mapped[float] = mapped_column(Float, default=0.0)
+    repeated_phrases: Mapped[list[str]] = mapped_column(JSON, default=list)
+    stats: Mapped[dict] = mapped_column(JSON, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+    __table_args__ = (UniqueConstraint("story_id", "character_id", name="uq_voice_profile_story_character"),)
 
 
 class ChapterScript(Base):

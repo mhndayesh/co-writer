@@ -3,14 +3,14 @@
 #
 #   ./run.sh
 #
-# Starts the FastAPI backend on :8080 and the Next.js frontend on :3000.
-# Ctrl+C stops both. Logs are streamed to your terminal with [api]/[web] tags.
-# If you don't have LM Studio running, the AI just degrades to a fallback
+# Starts Qdrant + Neo4j (Docker), the FastAPI backend on :8080, and the
+# Next.js frontend on :3000.  Ctrl+C stops everything.
+# Logs are streamed with [api]/[web] tags.
+# If you don't have LM Studio running, the AI degrades to a fallback
 # provider — the UI still works.
 
 set -e
 
-# Always work from the script's own directory regardless of where it was invoked.
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 cd "$ROOT"
 
@@ -51,27 +51,80 @@ LLM_KEY_ENCRYPTION_KEY=$FERNET
 LLM_PROVIDER=lmstudio
 LMSTUDIO_BASE_URL=http://localhost:1234/v1
 CORS_ORIGINS=http://localhost:3000
+QDRANT_URL=http://localhost:6333
+NEO4J_URI=bolt://localhost:7687
+NEO4J_USER=neo4j
+NEO4J_PASSWORD=gink_dev_password
 EOF
 fi
+
+# Append any missing service URLs to an existing .env (idempotent)
+grep -q '^QDRANT_URL=' "$API_DIR/.env"   || echo "QDRANT_URL=http://localhost:6333"      >> "$API_DIR/.env"
+grep -q '^NEO4J_URI=' "$API_DIR/.env"    || echo "NEO4J_URI=bolt://localhost:7687"        >> "$API_DIR/.env"
+grep -q '^NEO4J_USER=' "$API_DIR/.env"   || echo "NEO4J_USER=neo4j"                       >> "$API_DIR/.env"
+grep -q '^NEO4J_PASSWORD=' "$API_DIR/.env" || echo "NEO4J_PASSWORD=gink_dev_password"     >> "$API_DIR/.env"
 
 if [ ! -f "$WEB_DIR/.env.local" ]; then
   echo "NEXT_PUBLIC_API_BASE_URL=http://localhost:8080" > "$WEB_DIR/.env.local"
 fi
 
-# ── 2. Migrate DB (idempotent — alembic skips already-applied) ─────────
+# ── 2. Optional services via Docker ────────────────────────────────────
+DOCKER_OK=false
+if command -v docker &>/dev/null && docker info &>/dev/null 2>&1; then
+  DOCKER_OK=true
+fi
+
+start_container() {
+  local name="$1"; shift
+  local label="$1"; shift
+  if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${name}$"; then
+    echo "▸ $label   already running"
+    return 0
+  fi
+  if docker run -d --rm --name "$name" "$@" >/dev/null 2>&1; then
+    echo "▸ $label   started"
+  else
+    echo "  $label start failed (check docker logs $name)"
+  fi
+}
+
+if $DOCKER_OK; then
+  start_container gink-qdrant "qdrant  http://localhost:6333" \
+    -p 6333:6333 -p 6334:6334 \
+    qdrant/qdrant:latest
+
+  start_container gink-neo4j  "neo4j   http://localhost:7474" \
+    -p 7474:7474 -p 7687:7687 \
+    -e NEO4J_AUTH=neo4j/gink_dev_password \
+    neo4j:5-community
+else
+  echo "  Docker not available — skipping Qdrant & Neo4j (RAG and graph will be disabled)"
+fi
+
+# ── 3. Migrate DB (idempotent) ─────────────────────────────────────────
 ( cd "$API_DIR" && "$VENV_ALEMBIC" upgrade head )
 
-# ── 3. Kill anything still on our ports ────────────────────────────────
+# ── 4. Kill anything still on our ports ────────────────────────────────
 pkill -f "uvicorn app.main" 2>/dev/null || true
 pkill -f "next dev -p 3000" 2>/dev/null || true
 sleep 1
 
-# ── 4. Start backend + frontend in background, stream tagged logs ──────
-trap 'echo; echo "Stopping..."; kill 0 2>/dev/null; exit 0' INT TERM EXIT
+# ── 5. Start backend + frontend, stream tagged logs ────────────────────
+stop_all() {
+  echo
+  echo "Stopping..."
+  if $DOCKER_OK; then
+    docker stop gink-qdrant gink-neo4j 2>/dev/null || true
+  fi
+  kill 0 2>/dev/null
+  exit 0
+}
+trap stop_all INT TERM EXIT
 
+echo
 echo "▸ backend  http://localhost:8080"
 echo "▸ frontend http://localhost:3000"
-echo "▸ Ctrl+C to stop both"
+echo "▸ Ctrl+C to stop everything"
 echo
 
 ( "$VENV_UVICORN" app.main:app --host 127.0.0.1 --port 8080 --reload \

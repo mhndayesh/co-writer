@@ -1,19 +1,27 @@
-# G-Ink Novel Studio
+# Co-Writer — by G-Ink Studio
 
-Full-stack AI-powered writing studio. A from-scratch implementation of the Story Forge product vision (`Story_Forge_Docs.md`); the original single-file React prototype (`story_forge.jsx`) is kept in the repo for reference only — it is not a runtime dependency.
+Your AI co-writer. Write freely; it polishes the prose, files every character, place, faction, theme, plot thread, scene, and revelation automatically — and watches every continuity thread so you never lose the story.
 
-## What it is
+Built as a full-stack implementation of the Story Forge product vision (`Story_Forge_Docs.md`); the original single-file React prototype (`story_forge.jsx`) is kept for reference only.
 
+## What it does
+
+- **Flow Writing** — free-write → AI polish → structured extraction → one-click approve. Every chapter auto-files:
+  - Characters (new ones created, existing ones updated — status changes like death propagate, arc notes accumulate)
+  - Character relationships (created on first mention, updated in place on repeat)
+  - Locations, factions, themes, events
+  - Plot threads (status evolves: open → paid_off / abandoned across chapters)
+  - Scene cards with beat, goal, conflict, outcome, POV, location, time anchor, sensory palette
+  - Revelations / information ledger (who knows what, and does the reader?)
+  - Voice fingerprints (deterministic per-character dialogue stats rebuilt after every approve)
 - **Six writer-facing tabs** — Flow Writing, Chapters, Characters, Your World, Story Map, Story Check
-- **Six production stages** — Foundation → Characters → Plot → Write → Produce → Review (same data, structured nav)
+- **Six production stages** — Foundation → Characters → Plot → Write → Produce → Review (same data, two nav modes)
+- **Timeline & Weave** — scenes sorted by chronological `time_sort_key`; Plot Weave grid showing which threads touch which scenes
+- **Continuity Radar** — inspect exactly what the AI sees (Graph-RAG context) for any query
 - **Multi-user** with per-user accounts and encrypted per-user LLM API keys
-- **LLM-agnostic with split routing** — defaults to **LM Studio** (local); per-user switch to OpenAI, Anthropic, OpenRouter, or Google Gemini, and route creative work vs technical work to different models (see [Routing modes](#routing-modes--split-creative-work-from-technical-work))
-- **Writer-first Flow** — free-write → AI polish (or skip it with "use my writing as-is") → it auto-files characters, relationships, locations, factions, themes, events, and plot threads
-- **Three graph layers** —
-  - Front-end **Story Map** (react-force-graph-2d)
-  - Backend **Neo4j knowledge graph** projection
-  - **Graph-RAG** (Qdrant vectors + Neo4j subgraphs) so the AI reads the graph during generation
-- **Light & dark themes**, and a blocking progress overlay while AI runs
+- **LLM-agnostic with a simple router** — defaults to **LM Studio** (local); per-user switch to OpenAI, Anthropic, OpenRouter, or Google Gemini, with creative / technical / embedding lanes routed separately
+- **Three graph layers** — front-end Story Map (react-force-graph-2d), Neo4j knowledge graph, Graph-RAG (Qdrant + Neo4j subgraphs)
+- **Light & dark themes**, blocking progress overlay while AI runs
 
 ## Stack
 
@@ -31,73 +39,73 @@ Full-stack AI-powered writing studio. A from-scratch implementation of the Story
 ### Option 0 — One command (local, simplest)
 
 ```bash
-cp .env.example .env   # only needed once; run.sh also auto-generates secrets on first run
 ./run.sh
 ```
 
-`./run.sh` installs frontend deps on first run, generates `.env` secrets if missing, applies DB migrations, then starts the backend on :8080 and frontend on :3000 with tagged logs. Ctrl+C stops both. SQLite by default — no Docker required. (See [RUN.md](RUN.md) for all run options.)
+`run.sh` installs frontend deps on first run, generates `apps/api/.env` secrets if missing, applies DB migrations, starts **Qdrant** and **Neo4j** via Docker (if Docker is available), then streams the backend on **:8080** and frontend on **:3000** with tagged logs. Ctrl+C stops everything, including the Docker containers. SQLite by default — no external DB needed.
 
-### Option A — Docker (full stack incl. Neo4j + Qdrant)
+First-time Python setup (once):
+```bash
+cd apps/api && python3 -m venv .venv && ./.venv/bin/pip install -e .[dev] && cd ../..
+./run.sh
+```
+
+### Option A — Docker (full stack)
 
 ```bash
 cp .env.example .env
-# Generate the two secrets the .env asks for
-python -c "import secrets; print('JWT_SECRET=' + secrets.token_urlsafe(64))"
-python -c "from cryptography.fernet import Fernet; print('LLM_KEY_ENCRYPTION_KEY=' + Fernet.generate_key().decode())"
-# Paste the values into .env, then:
+python3 -c "import secrets; print('JWT_SECRET=' + secrets.token_urlsafe(64))"
+python3 -c "from cryptography.fernet import Fernet; print('LLM_KEY_ENCRYPTION_KEY=' + Fernet.generate_key().decode())"
+# Paste both into .env, then:
 docker compose up -d
 ```
 
 Open http://localhost:3000 — sign up — create a story.
 
-By default, the API will try to reach LM Studio at `http://host.docker.internal:1234/v1`. Start LM Studio with any chat model loaded and Server Mode enabled. If LM Studio isn't running, the app still works with a deterministic fallback so you can explore the UI.
+### Option B — Local dev (manual)
 
-### Option B — Local dev (without Docker)
-
-Terminal 1 — services:
 ```bash
+# Terminal 1 — data stores
 docker compose up -d postgres neo4j qdrant
-```
 
-Terminal 2 — backend:
-```bash
-cd apps/api
-python -m venv .venv && source .venv/bin/activate
-pip install -e .[dev]
-alembic upgrade head
+# Terminal 2 — backend
+cd apps/api && python3 -m venv .venv && source .venv/bin/activate
+pip install -e .[dev] && alembic upgrade head
 uvicorn app.main:app --reload --port 8080
+
+# Terminal 3 — frontend
+cd apps/web && npm install --legacy-peer-deps && npm run dev
 ```
 
-Terminal 3 — frontend:
-```bash
-cd apps/web
-npm install --legacy-peer-deps
-npm run dev
-```
+## What the AI sees
 
-## Switching LLM providers
+The context fed into every LLM call includes:
 
-In the UI: Settings → Routing mode + provider slots.
+- **WORLD** — genre, logline, setting, rules, lore
+- **CAST** — every character with role, status, personality, accumulated arc
+- **RELATIONSHIPS** — all known character bonds with type and description
+- **LOCATIONS / FACTIONS / THEMES / PLOT THREADS** (with status)
+- **CHAPTERS** — summaries of prior chapters (most recent 20)
+- **SCENES** — stored beat cards with `time_key`, POV, location, threads (last 60)
+- **REVELATIONS** — who knows what, reader perspective
+- **VOICE FINGERPRINTS** — per-character dialogue stats
+- **Graph-RAG** — Qdrant vector hits + Neo4j 1-hop subgraph for the query (when Qdrant/Neo4j are running)
 
-Providers: **LM Studio** (default, local `http://localhost:1234/v1`), **OpenAI** (`sk-...`), **Anthropic** (`sk-ant-...`, Claude Sonnet 4.5 default), **OpenRouter** (one key, namespaced models like `anthropic/claude-3.5-sonnet`), and **Google Gemini** (`gemini-2.0-flash`, with embeddings via `text-embedding-004`). Keys are encrypted at rest with Fernet using `LLM_KEY_ENCRYPTION_KEY`.
+This means a new chapter's AI always knows: which characters are dead, how arcs have evolved, what the timeline numbers look like, and which threads are open vs resolved.
 
-### Routing modes — split creative work from technical work
+## Model routing
 
-Different parts of the studio can run on different models. Pick a mode in Settings:
+Settings → provider slots.
 
-| Mode | Behavior |
+| Lane | Used for |
 |---|---|
-| **Single model** | One provider/model handles everything (the default). |
-| **Split creative/technical** | **Creative** slot drives prose work — Flow Polish, Writing Companion, Story Check. **Technical** slot drives structured extraction/filing. A dedicated **Embedding** slot handles Graph-RAG vectors. |
-| **Custom per-task** | Choose a provider/model for each task individually (Flow Polish, Writing Companion, Story Check, Flow Extract). Unset tasks fall back to their category, then to the default. |
+| **Creative** | Flow Polish, Writing Companion, Story Check |
+| **Technical** | Structured extraction and filing |
+| **Embedding** | Graph-RAG vectors |
 
-So you can, e.g., keep cheap structured "inserting" on a local LM Studio model while sending creative writing to a stronger cloud model — or any mix.
+Providers: **LM Studio** (default, local), **OpenAI**, **Anthropic**, **OpenRouter**, **Google Gemini**. Keys encrypted at rest. Anthropic / OpenRouter → embedding falls back to local LM Studio (they have no embeddings API).
 
-**Resolution order (custom mode):** `task:<page>` → category (creative/technical) → default profile.
-
-**Embeddings** always resolve to an embed-capable provider. Anthropic and OpenRouter have no embeddings API, so selecting one silently falls back to local LM Studio for vectors — your story text isn't sent to a cloud embedder unless you point the Embedding slot at one (OpenAI, Gemini, or LM Studio).
-
-Every AI run is logged to the `llm_runs` table with its provider + task, so you can audit which model handled what.
+Every AI run is logged to `llm_runs` with provider + task, so you can audit which model handled what.
 
 ## Repo layout
 
@@ -105,11 +113,9 @@ Every AI run is logged to the `llm_runs` table with its provider + task, so you 
 apps/
   api/          FastAPI backend
   web/          Next.js frontend
-packages/
-  schemas/      Shared JSON schemas
 docker-compose.yml
-Story_Forge_Docs.md   ← original product vision (historical reference)
-story_forge.jsx       ← original single-file prototype (reference only)
+Story_Forge_Docs.md   ← product vision (historical reference)
+story_forge.jsx       ← single-file prototype (reference only)
 ```
 
-See [Story_Forge_Docs.md](Story_Forge_Docs.md) for the original product vision (the *why*), [RUN.md](RUN.md) for run options, and [CLAUDE.md](CLAUDE.md) for the architecture quick-tour (the current *how*).
+See [CLAUDE.md](CLAUDE.md) for the architecture quick-tour, [RUN.md](RUN.md) for run options.

@@ -5,9 +5,9 @@ route "creative" work (prose writing, scene drafting, continuity comparison)
 and "technical" work (structured extraction/filing) to different models.
 
 Categories:
-  creative  — generates or judges prose; benefits from a stronger writing model
-  technical — produces structured JSON; can run on a cheaper/local model
-  embedding — vector embeddings (no `page`; resolved separately, needs an
+  creative  - generates or judges prose; benefits from a stronger writing model
+  technical - produces structured JSON; can run on a cheaper/local model
+  embedding - vector embeddings (no `page`; resolved separately, needs an
               embed-capable provider)
 """
 from __future__ import annotations
@@ -18,20 +18,14 @@ PAGE_CATEGORY: dict[str, str] = {
     "flow.companion": "creative",   # Writing Companion drafts a scene
     "story_check": "creative",      # continuity comparison / judgement
     "flow.extract": "technical",    # structured extraction → JSON
+    "flow.enhance": "technical",    # language enhancement → JSON suggestions
     "llm.test": "technical",        # connection diagnostic
 }
 
 CREATIVE = "creative"
 TECHNICAL = "technical"
 EMBEDDING = "embedding"
-
-# Tasks the Custom-mode UI exposes for per-task routing, in display order.
-CUSTOM_TASKS: list[tuple[str, str]] = [
-    ("flow.polish", "Flow Polish"),
-    ("flow.companion", "Writing Companion"),
-    ("story_check", "Story Check"),
-    ("flow.extract", "Flow Extract"),
-]
+LANES_ORDER = (CREATIVE, TECHNICAL, EMBEDDING)
 
 
 def category_for_page(page: str) -> str:

@@ -3,7 +3,7 @@ from fastapi import APIRouter
 from app.core.deps import CurrentUser, DB, get_user_story
 from app.core.errors import envelope_ok
 from app.services import embedding_service, rag_service
-from app.services.llm.factory import get_provider_for_user
+from app.services.llm.factory import get_embedding_provider
 
 router = APIRouter()
 

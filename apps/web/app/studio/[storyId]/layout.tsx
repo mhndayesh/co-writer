@@ -159,6 +159,11 @@ export default function StudioLayout({ children }: { children: React.ReactNode }
             {llmReachable === true && <span className="text-ink-green">reachable</span>}
             {llmReachable === false && <span className="text-ink-red inline-flex items-center gap-1"><AlertTriangle size={10}/>unreachable</span>}
           </div>
+          <div className="px-2 pt-1 pb-0.5">
+            <span className="text-ink-gold uppercase tracking-[0.2em]">Co-Writer</span>
+            <span className="text-ink-text3 mx-1">·</span>
+            <span className="text-ink-text3 uppercase tracking-[0.15em]">G-Ink Studio</span>
+          </div>
         </div>
       </aside>
       <main className="overflow-y-auto p-6 scrollbar-thin">{children}</main>

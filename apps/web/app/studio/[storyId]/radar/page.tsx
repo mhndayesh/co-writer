@@ -40,7 +40,18 @@ export default function RadarPage() {
         </Card>
       )}
       {reindex.data && (
-        <Card className="mt-4"><pre className="text-xs text-ink-text2">{JSON.stringify(reindex.data, null, 2)}</pre></Card>
+        <Card className="mt-4">
+          {reindex.data.reason === "qdrant_unavailable" ? (
+            <p className="text-sm text-ink-red">
+              Qdrant is not running. Start it with <code className="font-mono bg-ink-surface2 px-1 rounded">./run.sh</code> — it
+              launches Qdrant automatically via Docker. Vector search will be unavailable until then.
+            </p>
+          ) : reindex.data.reason ? (
+            <p className="text-sm text-ink-red">Indexing failed: {reindex.data.reason}</p>
+          ) : (
+            <p className="text-sm text-ink-green">Indexed {reindex.data.indexed} vector{reindex.data.indexed !== 1 ? "s" : ""} successfully.</p>
+          )}
+        </Card>
       )}
     </div>
   );

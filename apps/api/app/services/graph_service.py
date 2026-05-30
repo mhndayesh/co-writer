@@ -94,7 +94,7 @@ async def reproject_story(db: AsyncSession, story_id: str) -> dict[str, Any]:
          "pov": c.pov_character_id, "location": c.location_id, "character_ids": list(c.character_ids or [])}
         for c in chaps
     ]
-    loc_rows = [{"id": l.id, "name": l.name} for l in locs]
+    loc_rows = [{"id": loc.id, "name": loc.name} for loc in locs]
     fac_rows = [{"id": f.id, "name": f.name} for f in facs]
     theme_rows = [{"id": t.id, "name": t.name} for t in themes]
 

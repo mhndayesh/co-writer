@@ -44,8 +44,9 @@ Thumbs.db
 *.swo
 *~
 
-# Personal scratch (writer's own drafts, not part of the codebase)
+# Personal scratch (writer's own drafts / dev notes, not part of the codebase)
 story-so-far.md
+ISSUES_NOTES.md
 
 # DB backups / sqlite side-files
 *.db.bak*

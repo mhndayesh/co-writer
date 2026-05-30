@@ -3,7 +3,6 @@ import logging
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 
 from app.core.config import get_settings
 from app.core.errors import AppError, envelope_err
@@ -47,7 +46,7 @@ def create_app() -> FastAPI:
     # Routers
     from app.api.v1 import (
         auth, stories, world, characters, chapters, flow, story_check,
-        graph, rag, llm, locations, factions, scenes, threads, versions, export,
+        graph, rag, llm, locations, factions, scenes, threads, narrative, versions, export,
     )
 
     app.include_router(auth.router, prefix="/v1/auth", tags=["auth"])
@@ -59,6 +58,7 @@ def create_app() -> FastAPI:
     app.include_router(factions.router, prefix="/v1/stories", tags=["factions"])
     app.include_router(scenes.router, prefix="/v1/stories", tags=["scenes"])
     app.include_router(threads.router, prefix="/v1/stories", tags=["threads"])
+    app.include_router(narrative.router, prefix="/v1/stories", tags=["narrative"])
     app.include_router(flow.router, prefix="/v1/stories", tags=["flow"])
     app.include_router(story_check.router, prefix="/v1/stories", tags=["story-check"])
     app.include_router(graph.router, prefix="/v1/stories", tags=["graph"])

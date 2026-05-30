@@ -5,13 +5,12 @@ The JSON bundle shape matches Story Forge backup format so it round-trips.
 from __future__ import annotations
 
 import io
-import json
 from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import Chapter, Character, Story, World
+from app.db.models import Chapter, Character, PlotThread, PlotThreadSceneLink, Revelation, SceneCard, Story, World
 
 
 async def story_to_markdown(db: AsyncSession, story_id: str) -> str:
@@ -88,6 +87,10 @@ async def import_bundle(db: AsyncSession, user_id: str, bundle: dict) -> str:
     chaps = snap.get("chaps", []) or []
     locs = snap.get("locations", []) or []
     facs = snap.get("factions", []) or []
+    threads = snap.get("threads", []) or []
+    scenes = snap.get("scenes", []) or []
+    revelations = snap.get("revelations", []) or []
+    thread_scene_links = snap.get("thread_scene_links", []) or []
 
     story = Story(
         user_id=user_id,
@@ -156,13 +159,14 @@ async def import_bundle(db: AsyncSession, user_id: str, bundle: dict) -> str:
             visual_signature=f.get("visual_signature", ""),
         ))
 
+    chapter_id_map: dict[str, str] = {}
     for ch in chaps:
         new_char_ids = [id_map.get(cid, cid) for cid in (ch.get("characters") or []) if cid in id_map]
         loc = ch.get("location")
         new_loc = loc_id_map.get(loc) if loc else None
         pov = ch.get("pov")
         new_pov = id_map.get(pov) if pov else None
-        db.add(Chapter(
+        new_chapter = Chapter(
             story_id=story.id,
             number=int(ch.get("number") or 1),
             title=ch.get("title", ""),
@@ -172,6 +176,83 @@ async def import_bundle(db: AsyncSession, user_id: str, bundle: dict) -> str:
             location_id=new_loc,
             character_ids=new_char_ids,
             seeds=ch.get("seeds") or [],
+        )
+        db.add(new_chapter)
+        await db.flush()
+        if ch.get("id"):
+            chapter_id_map[ch["id"]] = new_chapter.id
+
+    thread_id_map: dict[str, str] = {}
+    for t in threads:
+        mapped_chapters = [chapter_id_map[cid] for cid in (t.get("chapter_ids") or []) if cid in chapter_id_map]
+        new_thread = PlotThread(
+            story_id=story.id,
+            name=t.get("name", ""),
+            status=t.get("status", "open"),
+            description=t.get("description", ""),
+            chapter_ids=mapped_chapters,
+        )
+        db.add(new_thread)
+        await db.flush()
+        if t.get("id"):
+            thread_id_map[t["id"]] = new_thread.id
+
+    scene_id_map: dict[str, str] = {}
+    for s in scenes:
+        old_threads = s.get("plot_threads") or s.get("plot_thread_ids") or []
+        old_chars = s.get("characters") or s.get("character_ids") or []
+        new_scene = SceneCard(
+            story_id=story.id,
+            chapter_id=chapter_id_map.get(s.get("chapter_id") or ""),
+            ordinal=int(s.get("ordinal") or 0),
+            beat=s.get("beat", ""),
+            title=s.get("title", ""),
+            summary=s.get("summary", ""),
+            goal=s.get("goal", ""),
+            conflict=s.get("conflict", ""),
+            outcome=s.get("outcome", ""),
+            pov_character_id=id_map.get(s.get("pov") or s.get("pov_character_id") or ""),
+            location_id=loc_id_map.get(s.get("location") or s.get("location_id") or ""),
+            character_ids=[id_map[cid] for cid in old_chars if cid in id_map],
+            plot_thread_ids=[thread_id_map[tid] for tid in old_threads if tid in thread_id_map],
+            time_anchor=s.get("time_anchor", ""),
+            time_sort_key=s.get("time_sort_key"),
+            duration_hint=s.get("duration_hint", ""),
+            sensory_palette=s.get("sensory_palette") or {},
+            source_excerpt=s.get("source_excerpt", ""),
+            content=s.get("content", ""),
+        )
+        db.add(new_scene)
+        await db.flush()
+        if s.get("id"):
+            scene_id_map[s["id"]] = new_scene.id
+
+    for r in revelations:
+        db.add(Revelation(
+            story_id=story.id,
+            scene_id=scene_id_map.get(r.get("scene_id") or ""),
+            chapter_id=chapter_id_map.get(r.get("chapter_id") or ""),
+            description=r.get("description", ""),
+            kind=r.get("kind", "revelation"),
+            characters_who_know=[id_map[cid] for cid in (r.get("characters_who_know") or []) if cid in id_map],
+            reader_knows=bool(r.get("reader_knows", False)),
+            notes=r.get("notes", ""),
+            confidence=float(r.get("confidence", 1.0) or 1.0),
+        ))
+
+    for link in thread_scene_links:
+        thread_id = thread_id_map.get(link.get("thread_id") or "")
+        scene_id = scene_id_map.get(link.get("scene_id") or "")
+        if not thread_id or not scene_id:
+            continue
+        db.add(PlotThreadSceneLink(
+            story_id=story.id,
+            thread_id=thread_id,
+            scene_id=scene_id,
+            chapter_id=chapter_id_map.get(link.get("chapter_id") or ""),
+            status=link.get("status", "touch"),
+            strength=float(link.get("strength", 1.0) or 1.0),
+            evidence=link.get("evidence", ""),
         ))
 
     await db.commit()

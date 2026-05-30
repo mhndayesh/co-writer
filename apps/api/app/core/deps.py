@@ -1,7 +1,6 @@
 from typing import Annotated
 
 from fastapi import Depends, Header
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import NotFound, Unauthorized

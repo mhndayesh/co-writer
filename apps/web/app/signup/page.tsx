@@ -27,6 +27,7 @@ export default function SignupPage() {
   return (
     <main className="min-h-screen flex items-center justify-center p-6">
       <Card className="w-full max-w-md">
+        <p className="text-[10px] uppercase tracking-[0.25em] text-ink-gold mb-3">Co-Writer · G-Ink Studio</p>
         <h1 className="text-2xl font-display mb-1">Create your account</h1>
         <p className="text-sm text-ink-text2 mb-6">Free and local-first by default.</p>
         <form onSubmit={submit}>

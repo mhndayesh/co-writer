@@ -9,7 +9,19 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import Chapter, Character, Faction, Location, Theme, World
+from app.db.models import (
+    Chapter,
+    Character,
+    CharacterRelationship,
+    CharacterVoiceProfile,
+    Faction,
+    Location,
+    PlotThread,
+    Revelation,
+    SceneCard,
+    Theme,
+    World,
+)
 
 
 def _trim(text: str, n: int) -> str:
@@ -24,7 +36,7 @@ async def build_story_context(
     story_id: str,
     *,
     include_chapter_bodies: bool = False,
-    max_chapters: int = 20,
+    max_chapters: int | None = None,
     extra_graph_block: str = "",
 ) -> str:
     """Return a compact Markdown context block for the story."""
@@ -44,6 +56,25 @@ async def build_story_context(
     themes = (
         await db.execute(select(Theme).where(Theme.story_id == story_id))
     ).scalars().all()
+    threads = (
+        await db.execute(select(PlotThread).where(PlotThread.story_id == story_id))
+    ).scalars().all()
+    scenes = (
+        await db.execute(select(SceneCard).where(SceneCard.story_id == story_id))
+    ).scalars().all()
+    revelations = (
+        await db.execute(select(Revelation).where(Revelation.story_id == story_id).order_by(Revelation.created_at))
+    ).scalars().all()
+    relationships = (
+        await db.execute(select(CharacterRelationship).where(CharacterRelationship.story_id == story_id))
+    ).scalars().all()
+    voice_profiles = (
+        await db.execute(select(CharacterVoiceProfile).where(CharacterVoiceProfile.story_id == story_id))
+    ).scalars().all()
+    char_by_id = {c.id: c.name for c in characters}
+    loc_by_id = {loc.id: loc.name for loc in locations}
+    chapter_by_id = {ch.id: ch for ch in chapters}
+    thread_by_id = {t.id: t.name for t in threads}
 
     parts: list[str] = []
 
@@ -81,6 +112,19 @@ async def build_story_context(
                 line += " (" + ", ".join(bits) + ")"
             if c.personality:
                 line += f" — {_trim(c.personality, 100)}"
+            if c.arc:
+                line += f" | arc: {_trim(c.arc, 100)}"
+            parts.append(line)
+        parts.append("")
+
+    if relationships:
+        parts.append("# RELATIONSHIPS")
+        for r in relationships:
+            src = char_by_id.get(r.source_id, "?")
+            dst = char_by_id.get(r.target_id, "?")
+            line = f"- {src} → {dst}: {r.type}"
+            if r.description:
+                line += f" — {_trim(r.description, 120)}"
             parts.append(line)
         parts.append("")
 
@@ -101,14 +145,79 @@ async def build_story_context(
         parts.append(", ".join(t.name for t in themes))
         parts.append("")
 
+    if threads:
+        parts.append("# PLOT THREADS")
+        for t in threads:
+            parts.append(f"- {t.name} ({t.status}): {_trim(t.description, 160)}")
+        parts.append("")
+
     if chapters:
         parts.append("# CHAPTERS (summaries)")
-        for ch in chapters[-max_chapters:]:
+        for ch in (chapters[-max_chapters:] if max_chapters else chapters):
             head = f"Ch{ch.number}. {ch.title or '(untitled)'}"
             summary = _trim(ch.summary or ch.content[:200], 200)
             parts.append(f"- {head} — {summary}")
             if include_chapter_bodies:
                 parts.append(_trim(ch.content, 1500))
+        parts.append("")
+
+    if scenes:
+        parts.append("# SCENES (stored analysis)")
+        ordered_scenes = sorted(
+            scenes,
+            key=lambda s: (
+                chapter_by_id.get(s.chapter_id).number if s.chapter_id in chapter_by_id else 999999,
+                s.ordinal,
+            ),
+        )
+        for s in ordered_scenes:
+            ch = chapter_by_id.get(s.chapter_id or "")
+            label = f"Ch{ch.number}." if ch else "Unassigned."
+            head = s.title or s.beat or s.summary[:60] or "Untitled scene"
+            bits = []
+            if s.time_sort_key is not None:
+                bits.append(f"time_key={s.time_sort_key:.2g}")
+            if s.time_anchor:
+                bits.append(f"time={s.time_anchor}")
+            if s.pov_character_id and s.pov_character_id in char_by_id:
+                bits.append(f"POV={char_by_id[s.pov_character_id]}")
+            if s.location_id and s.location_id in loc_by_id:
+                bits.append(f"location={loc_by_id[s.location_id]}")
+            if s.plot_thread_ids:
+                names = [thread_by_id[tid] for tid in s.plot_thread_ids if tid in thread_by_id]
+                if names:
+                    bits.append("threads=" + ", ".join(names[:4]))
+            line = f"- {label}{s.ordinal} {head}"
+            if bits:
+                line += " [" + "; ".join(bits) + "]"
+            detail = " / ".join(x for x in [s.goal, s.conflict, s.outcome] if x)
+            if detail:
+                line += f" — {_trim(detail, 220)}"
+            parts.append(line)
+        parts.append("")
+
+    if revelations:
+        parts.append("# REVELATIONS / INFORMATION LEDGER")
+        for r in revelations:
+            ch = chapter_by_id.get(r.chapter_id or "")
+            loc = f"Ch{ch.number}" if ch else "Unassigned"
+            knowers = [char_by_id[cid] for cid in (r.characters_who_know or []) if cid in char_by_id]
+            who = ", ".join(knowers) if knowers else "unknown characters"
+            reader = "reader knows" if r.reader_knows else "reader does not know yet"
+            parts.append(f"- {loc}: {_trim(r.description, 180)} ({who}; {reader})")
+        parts.append("")
+
+    if voice_profiles:
+        parts.append("# CHARACTER VOICE FINGERPRINTS")
+        for p in voice_profiles:
+            name = char_by_id.get(p.character_id, "Unknown")
+            if p.sample_count <= 0:
+                continue
+            parts.append(
+                f"- {name}: samples={p.sample_count}, avg_sentence_words={p.avg_sentence_words}, "
+                f"question_rate={p.question_rate}, exclamation_rate={p.exclamation_rate}, "
+                f"vocab_variety={p.vocabulary_variety}"
+            )
         parts.append("")
 
     if extra_graph_block:

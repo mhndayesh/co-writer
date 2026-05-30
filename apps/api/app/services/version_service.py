@@ -13,9 +13,12 @@ from app.db.models import (
     Chapter,
     Character,
     CharacterRelationship,
+    CharacterVoiceProfile,
     Faction,
     Location,
     PlotThread,
+    PlotThreadSceneLink,
+    Revelation,
     SceneCard,
     Story,
     StoryVersion,
@@ -35,6 +38,9 @@ async def snapshot(db: AsyncSession, story_id: str, *, note: str = "") -> StoryV
     themes = (await db.execute(select(Theme).where(Theme.story_id == story_id))).scalars().all()
     threads = (await db.execute(select(PlotThread).where(PlotThread.story_id == story_id))).scalars().all()
     scenes = (await db.execute(select(SceneCard).where(SceneCard.story_id == story_id))).scalars().all()
+    revelations = (await db.execute(select(Revelation).where(Revelation.story_id == story_id))).scalars().all()
+    thread_scene_links = (await db.execute(select(PlotThreadSceneLink).where(PlotThreadSceneLink.story_id == story_id))).scalars().all()
+    voice_profiles = (await db.execute(select(CharacterVoiceProfile).where(CharacterVoiceProfile.story_id == story_id))).scalars().all()
 
     def char_to_dict(c: Character) -> dict:
         return {
@@ -68,7 +74,10 @@ async def snapshot(db: AsyncSession, story_id: str, *, note: str = "") -> StoryV
             }
             for c in chaps
         ],
-        "locations": [{"id": l.id, "name": l.name, "description": l.description, "visual": l.visual} for l in locs],
+        "locations": [
+            {"id": loc.id, "name": loc.name, "description": loc.description, "visual": loc.visual}
+            for loc in locs
+        ],
         "factions": [{"id": f.id, "name": f.name, "description": f.description, "visual_signature": f.visual_signature} for f in facs],
         "themes": [{"id": t.id, "name": t.name, "description": t.description} for t in themes],
         "threads": [
@@ -76,8 +85,70 @@ async def snapshot(db: AsyncSession, story_id: str, *, note: str = "") -> StoryV
             for t in threads
         ],
         "scenes": [
-            {"id": s.id, "chapter_id": s.chapter_id, "ordinal": s.ordinal, "beat": s.beat, "content": s.content}
+            {
+                "id": s.id,
+                "chapter_id": s.chapter_id,
+                "ordinal": s.ordinal,
+                "beat": s.beat,
+                "title": s.title,
+                "summary": s.summary,
+                "goal": s.goal,
+                "conflict": s.conflict,
+                "outcome": s.outcome,
+                "pov": s.pov_character_id,
+                "location": s.location_id,
+                "characters": list(s.character_ids or []),
+                "plot_threads": list(s.plot_thread_ids or []),
+                "time_anchor": s.time_anchor,
+                "time_sort_key": s.time_sort_key,
+                "duration_hint": s.duration_hint,
+                "sensory_palette": dict(s.sensory_palette or {}),
+                "source_excerpt": s.source_excerpt,
+                "content": s.content,
+            }
             for s in scenes
+        ],
+        "revelations": [
+            {
+                "id": r.id,
+                "scene_id": r.scene_id,
+                "chapter_id": r.chapter_id,
+                "description": r.description,
+                "kind": r.kind,
+                "characters_who_know": list(r.characters_who_know or []),
+                "reader_knows": r.reader_knows,
+                "notes": r.notes,
+                "confidence": r.confidence,
+            }
+            for r in revelations
+        ],
+        "thread_scene_links": [
+            {
+                "id": link.id,
+                "thread_id": link.thread_id,
+                "scene_id": link.scene_id,
+                "chapter_id": link.chapter_id,
+                "status": link.status,
+                "strength": link.strength,
+                "evidence": link.evidence,
+            }
+            for link in thread_scene_links
+        ],
+        "voice_profiles": [
+            {
+                "id": p.id,
+                "character_id": p.character_id,
+                "sample_count": p.sample_count,
+                "dialogue_words": p.dialogue_words,
+                "avg_sentence_words": p.avg_sentence_words,
+                "question_rate": p.question_rate,
+                "exclamation_rate": p.exclamation_rate,
+                "vocabulary_variety": p.vocabulary_variety,
+                "dialogue_share": p.dialogue_share,
+                "repeated_phrases": list(p.repeated_phrases or []),
+                "stats": dict(p.stats or {}),
+            }
+            for p in voice_profiles
         ],
     }
 

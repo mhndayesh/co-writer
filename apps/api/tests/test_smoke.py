@@ -47,22 +47,63 @@ async def test_full_flow(client):
     assert r.status_code == 200
     # provider may say lmstudio but reachable=False — that's fine
 
+    raw_draft = 'Mira asked, "What did you do?" Aiden said, "I broke the pact under the moonlit arch."'
+
     # 6. Flow polish (uses fallback provider, returns plausible polished text)
-    r = await client.post(f"/v1/stories/{sid}/flow/polish", json={"raw": "Aiden walked into the throne room and Mira looked angry."}, headers=H)
+    r = await client.post(f"/v1/stories/{sid}/flow/polish", json={"raw": raw_draft}, headers=H)
     assert r.status_code == 200, r.text
-    polished = r.json()["data"]["polished"]
-    assert polished
+    assert r.json()["data"]["polished"]
+    polished = raw_draft
 
     # 7. Flow extract
     r = await client.post(f"/v1/stories/{sid}/flow/extract", json={"polished": polished}, headers=H)
     assert r.status_code == 200, r.text
     extract = r.json()["data"]
     assert "characters" in extract
+    extract.update({
+        "title_suggestion": "The Broken Pact",
+        "summary": "Mira confronts Aiden after learning the pact has been broken.",
+        "pov_suggestion": "Mira",
+        "location_suggestion": "Throne Room",
+        "characters": [
+            {"name": "Mira", "role": "protagonist", "note": "demands the truth", "is_new": True},
+            {"name": "Aiden", "role": "ally", "note": "admits he broke the pact", "is_new": True},
+        ],
+        "locations": [{"name": "Throne Room", "description": "A moonlit hall where the pact is exposed."}],
+        "threads": [{"name": "Broken pact", "description": "The old oath has failed.", "status": "open"}],
+        "scenes": [{
+            "ordinal": 1,
+            "title": "Mira Confronts Aiden",
+            "beat": "revelation",
+            "summary": "Aiden admits the pact is broken.",
+            "goal": "Mira wants Aiden to tell the truth.",
+            "conflict": "Aiden tries to soften the damage.",
+            "outcome": "The reader and Mira know the pact has failed.",
+            "pov": "Mira",
+            "location": "Throne Room",
+            "characters": ["Mira", "Aiden"],
+            "plot_threads": ["Broken pact"],
+            "time_anchor": "night of the coronation",
+            "time_sort_key": 12.5,
+            "duration_hint": "minutes",
+            "sensory_palette": {"sight": 4, "sound": 3, "smell": 1, "taste": 0, "touch": 2},
+            "revelations": [{
+                "description": "Aiden broke the pact under the moonlit arch.",
+                "kind": "secret",
+                "characters_who_know": ["Mira", "Aiden"],
+                "reader_knows": True,
+                "notes": "This should feed the information ledger.",
+                "confidence": 0.95,
+            }],
+            "source_excerpt": "Aiden said, \"I broke the pact under the moonlit arch.\"",
+            "content": "Information economy beat.",
+        }],
+    })
 
     # 8. Approve — commit as new chapter, opt-in to any detected characters
     include = [c["name"] for c in extract["characters"] if c.get("is_new")]
     r = await client.post(f"/v1/stories/{sid}/flow/approve", json={
-        "raw": "Aiden walked into the throne room and Mira looked angry.",
+        "raw": raw_draft,
         "polished": polished,
         "extracted": extract,
         "include_character_names": include,
@@ -72,6 +113,10 @@ async def test_full_flow(client):
     assert r.status_code == 200, r.text
     approve = r.json()["data"]
     assert approve["version_no"] >= 1
+    assert approve["scene_ids"]
+    assert approve["revelation_ids"]
+    assert approve["thread_scene_link_ids"]
+    scene_id = approve["scene_ids"][0]
 
     # 9. Chapter list shows the new chapter
     r = await client.get(f"/v1/stories/{sid}/chapters", headers=H)
@@ -79,6 +124,34 @@ async def test_full_flow(client):
     chapters = r.json()["data"]["chapters"]
     assert len(chapters) == 1
     assert chapters[0]["title"] == "The Reunion"
+
+    # 10. Scene intelligence APIs expose the approved scene
+    r = await client.get(f"/v1/stories/{sid}/timeline", headers=H)
+    assert r.status_code == 200
+    timeline = r.json()["data"]["scenes"]
+    assert len(timeline) == 1
+    assert timeline[0]["id"] == scene_id
+    assert timeline[0]["goal"] == "Mira wants Aiden to tell the truth."
+    assert timeline[0]["time_anchor"] == "night of the coronation"
+    assert timeline[0]["sensory_palette"]["sight"] == 4
+    assert "Broken pact" in timeline[0]["plot_thread_names"]
+
+    r = await client.get(f"/v1/stories/{sid}/revelations", headers=H)
+    assert r.status_code == 200
+    revelation = r.json()["data"]["revelations"][0]
+    assert revelation["scene_id"] == scene_id
+    assert revelation["reader_knows"] is True
+
+    r = await client.get(f"/v1/stories/{sid}/weave", headers=H)
+    assert r.status_code == 200
+    weave = r.json()["data"]
+    broken = next(t for t in weave["threads"] if t["name"] == "Broken pact")
+    assert broken["cells"][0]["scene_id"] == scene_id
+
+    r = await client.get(f"/v1/stories/{sid}/voice", headers=H)
+    assert r.status_code == 200
+    profiles = r.json()["data"]["profiles"]
+    assert any(p["sample_count"] > 0 for p in profiles)
 
     # 10. Graph view returns nodes (chapter + any new characters)
     r = await client.get(f"/v1/stories/{sid}/graph/view", headers=H)
@@ -94,9 +167,10 @@ async def test_full_flow(client):
 
     # 12. Story check (fallback returns a low-severity placeholder)
     chapter_id = chapters[0]["id"]
-    r = await client.post(f"/v1/stories/{sid}/check", json={"chapter_id": chapter_id}, headers=H)
+    r = await client.post(f"/v1/stories/{sid}/check", json={"chapter_id": chapter_id, "pass_type": "dialogue"}, headers=H)
     assert r.status_code == 200
     rep = r.json()["data"]
+    assert rep["pass_type"] == "dialogue"
     assert "findings" in rep
     assert "severity_buckets" in rep
 
@@ -128,15 +202,23 @@ async def test_llm_settings_roundtrip(client):
     H = {"Authorization": f"Bearer {r.json()['data']['tokens']['access_token']}"}
 
     # Save settings
-    r = await client.put("/v1/llm/settings", json={
-        "provider": "openai", "base_url": "https://api.openai.com/v1", "model": "gpt-4o-mini",
-        "embed_model": "text-embedding-3-small", "api_key": "sk-test-not-real",
+    lane = {
+        "provider": "openai",
+        "base_url": "https://api.openai.com/v1",
+        "model": "gpt-4o-mini",
+        "embed_model": "text-embedding-3-small",
+        "api_key": "sk-test-not-real",
+    }
+    r = await client.put("/v1/llm/config", json={
+        "creative": lane,
+        "technical": lane,
+        "embedding": lane,
     }, headers=H)
     assert r.status_code == 200
     s = r.json()["data"]
-    assert s["provider"] == "openai"
-    assert s["has_api_key"] is True
+    assert s["creative"]["provider"] == "openai"
+    assert s["creative"]["has_api_key"] is True
 
     # Read back
-    r = await client.get("/v1/llm/settings", headers=H)
-    assert r.json()["data"]["model"] == "gpt-4o-mini"
+    r = await client.get("/v1/llm/config", headers=H)
+    assert r.json()["data"]["creative"]["model"] == "gpt-4o-mini"

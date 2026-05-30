@@ -7,19 +7,9 @@ import { ArrowLeftCircle, Cpu } from "lucide-react";
 import * as api from "@/lib/api";
 import { isAuthed } from "@/lib/auth";
 import { Btn, Card, PageHdr } from "@/components/ui/Primitives";
-import { cn } from "@/lib/cn";
 import { ProviderForm, ProviderValue, emptyProvider, type Provider } from "@/components/settings/ProviderForm";
 
-type Mode = "single" | "split" | "custom";
-
-const CUSTOM_TASKS: { page: string; label: string }[] = [
-  { page: "flow.polish", label: "Flow Polish (prose rewrite)" },
-  { page: "flow.companion", label: "Writing Companion (scene draft)" },
-  { page: "story_check", label: "Story Check (continuity)" },
-  { page: "flow.extract", label: "Flow Extract (structured filing)" },
-];
-
-function toValue(p?: api.LLMProfile | null, fallback: Provider = "lmstudio"): ProviderValue {
+function toValue(p?: api.LaneConfig | null, fallback: Provider = "lmstudio"): ProviderValue {
   if (!p || !p.provider) return emptyProvider(fallback);
   return {
     provider: p.provider as Provider,
@@ -43,47 +33,41 @@ export default function SettingsPage() {
   const { data: config } = useQuery({ queryKey: ["llm-config"], queryFn: api.llmGetConfig });
   const { data: status } = useQuery({ queryKey: ["llm-status"], queryFn: api.llmStatus });
 
-  const [mode, setMode] = useState<Mode>("single");
-  const [def, setDef] = useState<ProviderValue>(emptyProvider());
-  const [creative, setCreative] = useState<ProviderValue>(emptyProvider("anthropic"));
-  const [technical, setTechnical] = useState<ProviderValue>(emptyProvider("lmstudio"));
-  const [embedding, setEmbedding] = useState<ProviderValue>(emptyProvider("lmstudio"));
-  const [tasks, setTasks] = useState<Record<string, ProviderValue>>({});
+  // "Same model for everything" is on when all three lanes match; otherwise split.
+  const [unified, setUnified] = useState(true);
+  const [creative, setCreative] = useState<ProviderValue>(emptyProvider());
+  const [technical, setTechnical] = useState<ProviderValue>(emptyProvider());
+  const [embedding, setEmbedding] = useState<ProviderValue>(emptyProvider());
 
   useEffect(() => {
     if (!config) return;
-    setMode(config.mode);
-    setDef(toValue(config.default));
-    setCreative(toValue(config.creative, "anthropic"));
-    setTechnical(toValue(config.technical, "lmstudio"));
-    setEmbedding(toValue(config.embedding, "lmstudio"));
-    const t: Record<string, ProviderValue> = {};
-    for (const { page } of CUSTOM_TASKS) t[page] = toValue(config.tasks?.[page], "lmstudio");
-    setTasks(t);
+    const c = toValue(config.creative);
+    const t = toValue(config.technical);
+    const e = toValue(config.embedding);
+    setCreative(c); setTechnical(t); setEmbedding(e);
+    const same = c.provider === t.provider && c.model === t.model && c.base_url === t.base_url
+      && c.provider === e.provider && c.model === e.model;
+    setUnified(same);
   }, [config]);
 
-  const statusByRole = useMemo(() => {
+  const statusByLane = useMemo(() => {
     const map: Record<string, api.LLMStatusItem> = {};
-    for (const s of status?.statuses || []) map[s.role] = s;
+    for (const s of status?.statuses || []) map[s.lane] = s;
     return map;
   }, [status]);
 
   const save = useMutation({
     mutationFn: () => {
-      const payload: any = { mode, default: toPayload(def) };
-      if (mode === "split" || mode === "custom") {
-        payload.creative = toPayload(creative);
-        payload.technical = toPayload(technical);
-        payload.embedding = toPayload(embedding);
+      if (unified) {
+        // Write the creative form to all three lanes.
+        const p = toPayload(creative);
+        return api.llmPutConfig({ creative: p, technical: p, embedding: p });
       }
-      if (mode === "custom") {
-        payload.tasks = Object.fromEntries(
-          CUSTOM_TASKS
-            .filter(({ page }) => tasks[page] && tasks[page].provider)
-            .map(({ page }) => [page, toPayload(tasks[page])]),
-        );
-      }
-      return api.llmPutConfig(payload);
+      return api.llmPutConfig({
+        creative: toPayload(creative),
+        technical: toPayload(technical),
+        embedding: toPayload(embedding),
+      });
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["llm-config"] });
@@ -94,77 +78,41 @@ export default function SettingsPage() {
   return (
     <main className="max-w-3xl mx-auto p-6">
       <Link href="/studio" className="text-xs text-ink-text2 hover:text-ink-goldLight inline-flex items-center gap-1.5 mb-4"><ArrowLeftCircle size={14}/> Back to studio</Link>
-      <PageHdr title="Settings" subtitle="Route writing and technical work to different models. LM Studio (local) is the default." />
+      <PageHdr title="Settings" subtitle="Choose which model handles your writing vs. the behind-the-scenes filing. LM Studio (local) is the default." />
 
-      {/* Mode selector */}
       <Card className="mb-4">
-        <div className="flex items-center gap-2 mb-3"><Cpu size={16}/><h2 className="font-display text-lg">Routing mode</h2></div>
-        <div className="grid grid-cols-3 gap-1 bg-ink-surface2 border border-ink-border rounded-md p-1 mb-3">
-          {(["single", "split", "custom"] as Mode[]).map((m) => (
-            <button key={m} onClick={() => setMode(m)}
-              className={cn("text-xs py-2 px-2 rounded uppercase tracking-wider transition-colors",
-                mode === m ? "bg-ink-gold text-ink-deep" : "text-ink-text2 hover:text-ink-text")}>
-              {m === "single" ? "Single model" : m === "split" ? "Split creative/technical" : "Custom per-task"}
-            </button>
-          ))}
-        </div>
-        <p className="text-sm text-ink-text2">
-          {mode === "single" && "One provider/model handles everything — writing, structured extraction, and embeddings."}
-          {mode === "split" && "Creative work (polishing, scene drafting, story-check) uses one model; technical work (structured extraction) uses another. Embeddings have their own slot."}
-          {mode === "custom" && "Pick a provider/model for each individual task. Unset tasks fall back to their category (creative/technical), then to the default."}
+        <label className="flex items-center gap-2 cursor-pointer">
+          <input type="checkbox" checked={unified} onChange={(e) => setUnified(e.target.checked)} />
+          <span className="text-sm"><Cpu size={14} className="inline mr-1"/> Use the same model for everything</span>
+        </label>
+        <p className="text-sm text-ink-text2 mt-2">
+          {unified
+            ? "One provider/model handles writing, structured filing, and embeddings."
+            : "Route creative writing, technical filing, and embeddings to different models. Each lane has its own provider, model, and key."}
         </p>
       </Card>
 
-      {mode === "single" && (
+      {unified ? (
         <Card className="mb-4">
-          <h3 className="font-display text-lg mb-3">Provider</h3>
-          <ProviderForm value={def} onChange={setDef} testRole="default" status={statusByRole["default"]} />
+          <h3 className="font-display text-lg mb-3">Model</h3>
+          <ProviderForm value={creative} onChange={setCreative} lane="creative" status={statusByLane["creative"]} />
         </Card>
-      )}
-
-      {(mode === "split" || mode === "custom") && (
+      ) : (
         <>
-          {mode === "split" && (
-            <div className="grid gap-4 md:grid-cols-2 mb-4">
-              <Card>
-                <h3 className="font-display text-lg mb-1">Creative</h3>
-                <p className="text-xs text-ink-text3 mb-3">Polishing · Writing Companion · Story Check</p>
-                <ProviderForm value={creative} onChange={setCreative} testRole="creative" showEmbed={false} status={statusByRole["creative"]} />
-              </Card>
-              <Card>
-                <h3 className="font-display text-lg mb-1">Technical</h3>
-                <p className="text-xs text-ink-text3 mb-3">Structured extraction · filing</p>
-                <ProviderForm value={technical} onChange={setTechnical} testRole="technical" showEmbed={false} status={statusByRole["technical"]} />
-              </Card>
-            </div>
-          )}
-
-          {mode === "custom" && (
-            <div className="space-y-4 mb-4">
-              {CUSTOM_TASKS.map(({ page, label }) => (
-                <Card key={page}>
-                  <h3 className="font-display text-base mb-3">{label}</h3>
-                  <ProviderForm
-                    value={tasks[page] || emptyProvider()}
-                    onChange={(v) => setTasks((prev) => ({ ...prev, [page]: v }))}
-                    testRole={`task:${page}`}
-                    showEmbed={false}
-                  />
-                </Card>
-              ))}
-              <Card>
-                <h3 className="font-display text-base mb-1">Default fallback</h3>
-                <p className="text-xs text-ink-text3 mb-3">Used by any task left unset above.</p>
-                <ProviderForm value={def} onChange={setDef} testRole="default" showEmbed={false} status={statusByRole["default"]} />
-              </Card>
-            </div>
-          )}
-
-          {/* Embedding slot — shared by split + custom */}
+          <Card className="mb-4">
+            <h3 className="font-display text-lg mb-1">Creative</h3>
+            <p className="text-xs text-ink-text3 mb-3">Flow Polish · Writing Companion · Story Check</p>
+            <ProviderForm value={creative} onChange={setCreative} lane="creative" showEmbed={false} status={statusByLane["creative"]} />
+          </Card>
+          <Card className="mb-4">
+            <h3 className="font-display text-lg mb-1">Technical</h3>
+            <p className="text-xs text-ink-text3 mb-3">Structured extraction · filing</p>
+            <ProviderForm value={technical} onChange={setTechnical} lane="technical" showEmbed={false} status={statusByLane["technical"]} />
+          </Card>
           <Card className="mb-4">
             <h3 className="font-display text-lg mb-1">Embeddings (Graph-RAG vectors)</h3>
-            <p className="text-xs text-ink-text3 mb-3">Must be embed-capable. Anthropic can't embed — defaults to local LM Studio.</p>
-            <ProviderForm value={embedding} onChange={setEmbedding} testRole="embedding" showEmbed status={statusByRole["embedding"]} />
+            <p className="text-xs text-ink-text3 mb-3">Must be embed-capable. Anthropic / OpenRouter can't embed — defaults to local LM Studio.</p>
+            <ProviderForm value={embedding} onChange={setEmbedding} lane="embedding" showEmbed status={statusByLane["embedding"]} />
           </Card>
         </>
       )}
@@ -177,7 +125,7 @@ export default function SettingsPage() {
 
       <Card>
         <h2 className="font-display text-lg mb-2">How routing works</h2>
-        <p className="text-sm text-ink-text2">Every AI action carries a task label. In <strong>Split</strong> mode, creative tasks (prose polishing, the Writing Companion, Story Check) go to the Creative model, and structured extraction goes to the Technical model. In <strong>Custom</strong> mode you override per task. Embeddings always use the Embedding slot. If a provider is unreachable, the studio degrades to a deterministic fallback so the UI never breaks.</p>
+        <p className="text-sm text-ink-text2">Every AI action is tagged. Creative tasks (Flow Polish, the Writing Companion, Story Check) use the <strong>Creative</strong> model; structured extraction uses the <strong>Technical</strong> model; Graph-RAG vectors use the <strong>Embedding</strong> model. With "same model for everything" on, all three are identical. If a provider is unreachable, the studio degrades to a deterministic fallback so the UI never breaks.</p>
       </Card>
     </main>
   );

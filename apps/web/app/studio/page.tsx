@@ -16,10 +16,21 @@ export default function StudioHub() {
   const qc = useQueryClient();
   const [title, setTitle] = useState("");
   const [genre, setGenre] = useState(GENRES[0]);
+  const [canFetchStories, setCanFetchStories] = useState(false);
 
-  useEffect(() => { if (!isAuthed()) router.replace("/login"); }, [router]);
+  useEffect(() => {
+    if (!isAuthed()) {
+      router.replace("/login");
+      return;
+    }
+    setCanFetchStories(true);
+  }, [router]);
 
-  const { data: stories, isLoading } = useQuery({ queryKey: ["stories"], queryFn: api.listStories, enabled: typeof window !== "undefined" });
+  const { data: stories, isLoading } = useQuery({
+    queryKey: ["stories"],
+    queryFn: api.listStories,
+    enabled: canFetchStories,
+  });
 
   const create = useMutation({
     mutationFn: (p: any) => api.createStory(p),
@@ -35,6 +46,11 @@ export default function StudioHub() {
 
   return (
     <main className="max-w-6xl mx-auto p-6">
+      <div className="mb-1">
+        <span className="text-[10px] uppercase tracking-[0.25em] text-ink-gold">Co-Writer</span>
+        <span className="text-[10px] text-ink-text3 mx-1">·</span>
+        <span className="text-[10px] uppercase tracking-[0.2em] text-ink-text3">G-Ink Studio</span>
+      </div>
       <PageHdr
         title="Your stories"
         subtitle="Each story is a separate project. Open one to start writing."
@@ -69,7 +85,7 @@ export default function StudioHub() {
         </div>
       </Card>
 
-      {isLoading && <p className="text-ink-text2">Loading…</p>}
+      {canFetchStories && isLoading && <p className="text-ink-text2">Loading…</p>}
 
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
         {(stories || []).map((s: any) => (
@@ -93,7 +109,7 @@ export default function StudioHub() {
             <Link href={`/studio/${s.id}/flow`} className="btn btn-primary w-full mt-4">Open →</Link>
           </Card>
         ))}
-        {!isLoading && (stories || []).length === 0 && (
+        {canFetchStories && !isLoading && (stories || []).length === 0 && (
           <Card className="md:col-span-2 lg:col-span-3 text-center text-ink-text2">
             No stories yet. Create your first above.
           </Card>

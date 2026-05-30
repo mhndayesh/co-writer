@@ -11,11 +11,27 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import delete as sa_delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import Chapter, Character, CharacterRelationship, Event, Faction, FlowDraft, Location, PlotThread, Story, Theme, User, World
-from app.db.schemas import FlowApproveRequest, FlowExtractResponse, FlowPolishResponse
+from app.db.models import (
+    Chapter,
+    Character,
+    CharacterRelationship,
+    Event,
+    Faction,
+    FlowDraft,
+    Location,
+    PlotThread,
+    PlotThreadSceneLink,
+    Revelation,
+    SceneCard,
+    Story,
+    Theme,
+    User,
+    World,
+)
+from app.db.schemas import ExtractedScene, FlowApproveRequest, FlowEnhanceResponse, FlowExtractResponse, FlowPolishResponse
 from app.services import llm_service
 from app.services.context_builder import build_story_context
 
@@ -56,6 +72,8 @@ Return ONLY a single JSON object with EXACTLY these keys:
   characters: every character that appears or is named in the scene
               [{"name": "...", "role": "protagonist|antagonist|ally|mentor|rival|supporting|...",
                 "note": "1-line summary of their role IN THIS SCENE",
+                "status": "alive|dead|unknown|missing|transformed — ONLY set if status CHANGED in this scene; omit or empty string if unchanged",
+                "arc_note": "1-sentence character development observed in this scene — omit or empty if no clear growth/change",
                 "is_new": true|false}]
               Mark is_new=true ONLY if absent from the provided CAST.
 
@@ -82,12 +100,113 @@ Return ONLY a single JSON object with EXACTLY these keys:
   threads: open subplots / dangling threads to track
               [{"name": "...", "description": "1-line summary", "status": "open|paid_off|abandoned"}]
 
+  scenes: scene-level beat cards in reading order
+              [{
+                "ordinal": 1,
+                "title": "short scene title",
+                "beat": "inciting incident|reversal|aftermath|...",
+                "summary": "1 sentence",
+                "goal": "what the POV/scene wants",
+                "conflict": "what blocks the goal",
+                "outcome": "what changes by the end",
+                "pov": "<character name>",
+                "location": "<location name>",
+                "characters": ["<character name>", ...],
+                "plot_threads": ["<thread name>", ...],
+                "time_anchor": "story-time label if stated, e.g. 'three days later'",
+                "time_sort_key": "a chronological number (e.g. story-day 1, 2, 3…) — MUST be consistent with existing scene time_key values shown in STORY CONTEXT; null if no clear timeline position",
+                "duration_hint": "minutes|hours|overnight|...",
+                "sensory_palette": {"sight": 0, "sound": 0, "smell": 0, "taste": 0, "touch": 0},
+                "revelations": [
+                  {"description": "...", "kind": "revelation|secret|clue|lie|dramatic_irony",
+                   "characters_who_know": ["<character name>", ...],
+                   "reader_knows": true|false, "notes": "", "confidence": 0.0}
+                ],
+                "source_excerpt": "short excerpt grounding the card",
+                "content": "optional scene card note"
+              }]
+
 Rules:
 - Use ONLY information present in the POLISHED SCENE. Do not invent.
 - Do NOT extract section headers from the STORY CONTEXT (e.g. "WORLD", "CAST", "CHAPTERS")
   as characters or anything else — those are formatting, not story content.
 - If a field has nothing, return an empty array (NEVER omit a key).
 - Return ONLY the JSON object — no prose, no code fences, no markdown."""
+
+
+ENHANCE_SYSTEM = """You are a language editor. Your only job is to improve the language quality
+of the author's text without touching the story in any way.
+
+Steps:
+1. Detect the language of the input text (it may be Arabic, English, or any other language).
+2. Fix grammar, punctuation, word choice, sentence flow, and style — in THAT language.
+3. Keep EXACTLY the same story content: same events, characters, dialogue meaning, plot beats.
+4. Do NOT translate. The output must be in the same language as the input.
+5. Do NOT add, remove, or change any story elements. Only the language quality improves.
+6. Preserve the author's voice — clean up errors without rewriting their style entirely.
+
+Return ONLY a single JSON object with these keys:
+  language: detected language name in English (e.g. "Arabic", "English", "French")
+  enhanced: the improved text in the same language as the input
+  notes: one or two sentences in English describing what was improved"""
+
+
+async def enhance(db: AsyncSession, user: User, story_id: str, raw: str) -> FlowEnhanceResponse:
+    """Language-enhance the author's own text without changing the story."""
+    resp, fb = await llm_service.run(
+        db, user, page="flow.enhance", system=ENHANCE_SYSTEM, user_msg=raw,
+        json_mode=True, temperature=0.2, story_id=story_id,
+    )
+    parsed = llm_service.parse_json(resp.text) or {}
+    if not isinstance(parsed, dict):
+        parsed = {}
+    enhanced_text = (parsed.get("enhanced") or "").strip()
+    return FlowEnhanceResponse(
+        language=(parsed.get("language") or "").strip(),
+        enhanced=enhanced_text if enhanced_text else raw,
+        notes=(parsed.get("notes") or "").strip(),
+        fallback=fb,
+    )
+
+
+def _clean_name_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        if not isinstance(item, str):
+            continue
+        name = item.strip()
+        key = name.lower()
+        if not name or key in seen:
+            continue
+        seen.add(key)
+        out.append(name)
+    return out
+
+
+def _clean_sensory(value: object) -> dict[str, int]:
+    senses = {"sight": 0, "sound": 0, "smell": 0, "taste": 0, "touch": 0}
+    if not isinstance(value, dict):
+        return senses
+    for key in senses:
+        raw = value.get(key, 0)
+        try:
+            n = int(float(raw))
+        except Exception:
+            n = 0
+        senses[key] = max(0, min(100, n))
+    return senses
+
+
+def _clean_sort_key(value: object) -> float | None:
+    if value in ("", None):
+        return None
+    try:
+        return float(value)
+    except Exception:
+        return None
 
 
 async def polish(db: AsyncSession, user: User, story_id: str, raw: str, notes: str = "") -> FlowPolishResponse:
@@ -122,10 +241,15 @@ async def extract(db: AsyncSession, user: User, story_id: str, polished: str) ->
             continue
         name = c["name"].strip()
         existing = by_name.get(name.lower())
+        raw_status = (c.get("status") or "").strip().lower()
+        if raw_status not in ("alive", "dead", "unknown", "missing", "transformed"):
+            raw_status = ""
         cleaned_chars.append({
             "name": name,
             "role": c.get("role", "") or "",
             "note": c.get("note", "") or "",
+            "status": raw_status,
+            "arc_note": (c.get("arc_note") or "").strip(),
             "is_new": existing is None,
             "existing_id": existing.id if existing is not None else None,
         })
@@ -177,6 +301,73 @@ async def extract(db: AsyncSession, user: User, story_id: str, polished: str) ->
                 status = "open"
             cleaned_threads.append({"name": t["name"].strip(), "description": t.get("description", "") or "", "status": status})
 
+    cleaned_scenes: list[dict] = []
+    for idx, scene in enumerate(parsed.get("scenes") or [], start=1):
+        if not isinstance(scene, dict):
+            continue
+        try:
+            ordinal = int(scene.get("ordinal") or idx)
+        except Exception:
+            ordinal = idx
+        revelations: list[dict] = []
+        for rev in scene.get("revelations") or []:
+            if not isinstance(rev, dict) or not rev.get("description"):
+                continue
+            try:
+                confidence = float(rev.get("confidence", 1.0))
+            except Exception:
+                confidence = 1.0
+            revelations.append({
+                "description": str(rev.get("description", "")).strip(),
+                "kind": (rev.get("kind") or "revelation").strip() if isinstance(rev.get("kind"), str) else "revelation",
+                "characters_who_know": _clean_name_list(rev.get("characters_who_know")),
+                "reader_knows": bool(rev.get("reader_knows", False)),
+                "notes": rev.get("notes", "") or "",
+                "confidence": max(0.0, min(1.0, confidence)),
+            })
+        cleaned_scenes.append({
+            "ordinal": ordinal,
+            "title": scene.get("title", "") or "",
+            "beat": scene.get("beat", "") or "",
+            "summary": scene.get("summary", "") or "",
+            "goal": scene.get("goal", "") or "",
+            "conflict": scene.get("conflict", "") or "",
+            "outcome": scene.get("outcome", "") or "",
+            "pov": scene.get("pov", "") or "",
+            "location": scene.get("location", "") or "",
+            "characters": _clean_name_list(scene.get("characters")),
+            "plot_threads": _clean_name_list(scene.get("plot_threads")),
+            "time_anchor": scene.get("time_anchor", "") or "",
+            "time_sort_key": _clean_sort_key(scene.get("time_sort_key")),
+            "duration_hint": scene.get("duration_hint", "") or "",
+            "sensory_palette": _clean_sensory(scene.get("sensory_palette")),
+            "revelations": revelations,
+            "source_excerpt": scene.get("source_excerpt", "") or "",
+            "content": scene.get("content", "") or "",
+        })
+
+    if not cleaned_scenes and polished.strip():
+        cleaned_scenes.append({
+            "ordinal": 1,
+            "title": parsed.get("title_suggestion", "") or "",
+            "beat": "drafted scene",
+            "summary": parsed.get("summary", "") or "",
+            "goal": "",
+            "conflict": "",
+            "outcome": "",
+            "pov": parsed.get("pov_suggestion", "") or "",
+            "location": parsed.get("location_suggestion", "") or "",
+            "characters": [c["name"] for c in cleaned_chars],
+            "plot_threads": [t["name"] for t in cleaned_threads],
+            "time_anchor": "",
+            "time_sort_key": None,
+            "duration_hint": "",
+            "sensory_palette": _clean_sensory({}),
+            "revelations": [],
+            "source_excerpt": polished[:300],
+            "content": "",
+        })
+
     return FlowExtractResponse(
         title_suggestion=parsed.get("title_suggestion", "") or "",
         summary=parsed.get("summary", "") or "",
@@ -189,7 +380,34 @@ async def extract(db: AsyncSession, user: User, story_id: str, polished: str) ->
         locations=cleaned_locations,
         factions=cleaned_factions,
         threads=cleaned_threads,
+        scenes=cleaned_scenes,
         fallback=fb,
+    )
+
+
+def _resolve_ids_from_names(names: list[str], by_name: dict[str, object]) -> list[str]:
+    ids: list[str] = []
+    for name in names:
+        row = by_name.get(name.strip().lower())
+        if row is None:
+            continue
+        row_id = getattr(row, "id", None)
+        if row_id and row_id not in ids:
+            ids.append(row_id)
+    return ids
+
+
+def _scene_fallback(payload: FlowApproveRequest) -> ExtractedScene:
+    return ExtractedScene(
+        ordinal=1,
+        title=payload.extracted.title_suggestion or payload.chapter_title,
+        beat="drafted scene",
+        summary=payload.extracted.summary or payload.chapter_summary,
+        pov=payload.extracted.pov_suggestion,
+        location=payload.extracted.location_suggestion,
+        characters=[c.name for c in payload.extracted.characters],
+        plot_threads=[t.name for t in payload.extracted.threads],
+        source_excerpt=payload.polished[:300],
     )
 
 
@@ -198,7 +416,7 @@ async def approve(
     user: User,
     story_id: str,
     payload: FlowApproveRequest,
-) -> tuple[Chapter, list[str], list[str], int]:
+) -> tuple[Chapter, list[str], list[str], int, list[str], list[str], list[str]]:
     """Commit a polished scene to the story.
 
     File everything the AI found into the right tables so the writer can keep
@@ -260,6 +478,23 @@ async def approve(
         await db.flush()
         new_char_ids.append(ch.id)
         name_to_new_id[key] = ch.id
+        existing_by_name[key] = ch
+
+    # 1b. Update status / arc for existing characters when the scene changes them.
+    for c in payload.extracted.characters:
+        if c.is_new:
+            continue
+        existing_char = existing_by_name.get(c.name.strip().lower())
+        if existing_char is None and c.existing_id:
+            existing_char = await db.get(Character, c.existing_id)
+        if existing_char is None:
+            continue
+        if c.status and existing_char.status != c.status:
+            existing_char.status = c.status
+        if c.arc_note:
+            existing_char.arc = (
+                (existing_char.arc + " · " if existing_char.arc else "") + c.arc_note
+            )
 
     # 2. Weave new themes into the world bible + Themes table
     added_themes: list[str] = []
@@ -281,7 +516,9 @@ async def approve(
 
     # 3. Add new locations (deduped against existing by name)
     existing_loc_rows = (await db.execute(select(Location).where(Location.story_id == story_id))).scalars().all()
-    existing_loc_by_name: dict[str, Location] = {l.name.lower(): l for l in existing_loc_rows}
+    existing_loc_by_name: dict[str, Location] = {
+        loc_row.name.lower(): loc_row for loc_row in existing_loc_rows
+    }
     chapter_location_id: str | None = None
     for loc in payload.extracted.locations:
         if not loc.name:
@@ -377,8 +614,10 @@ async def approve(
         overwrite_chapter.location_id = chapter_location_id
         overwrite_chapter.character_ids = referenced_ids
         # Clear stale events that were extracted for the previous content
-        from sqlalchemy import delete as sa_delete
         await db.execute(sa_delete(Event).where(Event.chapter_id == overwrite_chapter.id))
+        await db.execute(sa_delete(PlotThreadSceneLink).where(PlotThreadSceneLink.chapter_id == overwrite_chapter.id))
+        await db.execute(sa_delete(Revelation).where(Revelation.chapter_id == overwrite_chapter.id))
+        await db.execute(sa_delete(SceneCard).where(SceneCard.chapter_id == overwrite_chapter.id))
         chapter = overwrite_chapter
     else:
         chapter = Chapter(
@@ -455,7 +694,118 @@ async def approve(
                 ids.append(chapter.id)
                 thr.chapter_ids = ids
 
-    # 9. Mark every open draft for this story as approved so the next Flow
+    # 9. Store scene-level annotations, revelations, and scene-thread links.
+    scene_ids: list[str] = []
+    revelation_ids: list[str] = []
+    thread_scene_link_ids: list[str] = []
+    scenes = payload.extracted.scenes or [_scene_fallback(payload)]
+    for idx, sc in enumerate(scenes, start=1):
+        pov_id = name_to_any_id.get((sc.pov or payload.extracted.pov_suggestion or "").strip().lower())
+
+        loc_id = chapter_location_id
+        loc_name = (sc.location or payload.extracted.location_suggestion or "").strip()
+        if loc_name:
+            loc_key = loc_name.lower()
+            loc_row = existing_loc_by_name.get(loc_key)
+            if loc_row is None:
+                loc_row = Location(story_id=story_id, name=loc_name, description="")
+                db.add(loc_row)
+                await db.flush()
+                existing_loc_by_name[loc_key] = loc_row
+            loc_id = loc_row.id
+
+        scene_char_ids = _resolve_ids_from_names(sc.characters, existing_by_name)
+        if not scene_char_ids:
+            scene_char_ids = list(referenced_ids)
+
+        thread_names = list(sc.plot_threads or [])
+        if len(scenes) == 1 and not thread_names:
+            thread_names = [t.name for t in payload.extracted.threads]
+        scene_thread_ids: list[str] = []
+        for name in thread_names:
+            key = name.strip().lower()
+            if not key:
+                continue
+            thr = existing_thread_by_name.get(key)
+            if thr is None:
+                thr = PlotThread(story_id=story_id, name=name.strip(), description="", status="open", chapter_ids=[])
+                db.add(thr)
+                await db.flush()
+                existing_thread_by_name[key] = thr
+            if thr.id not in scene_thread_ids:
+                scene_thread_ids.append(thr.id)
+            ids = list(thr.chapter_ids or [])
+            if chapter.id not in ids:
+                ids.append(chapter.id)
+                thr.chapter_ids = ids
+
+        scene = SceneCard(
+            story_id=story_id,
+            chapter_id=chapter.id,
+            ordinal=sc.ordinal or idx,
+            beat=sc.beat or "",
+            title=sc.title or "",
+            summary=sc.summary or "",
+            goal=sc.goal or "",
+            conflict=sc.conflict or "",
+            outcome=sc.outcome or "",
+            pov_character_id=pov_id,
+            location_id=loc_id,
+            character_ids=scene_char_ids,
+            plot_thread_ids=scene_thread_ids,
+            time_anchor=sc.time_anchor or "",
+            time_sort_key=sc.time_sort_key,
+            duration_hint=sc.duration_hint or "",
+            sensory_palette=sc.sensory_palette or {},
+            source_excerpt=sc.source_excerpt or "",
+            content=sc.content or "",
+        )
+        db.add(scene)
+        await db.flush()
+        scene_ids.append(scene.id)
+
+        for tid in scene_thread_ids:
+            link = PlotThreadSceneLink(
+                story_id=story_id,
+                thread_id=tid,
+                scene_id=scene.id,
+                chapter_id=chapter.id,
+                status="touch",
+                strength=1.0,
+                evidence=sc.summary or sc.beat or sc.source_excerpt[:200],
+            )
+            db.add(link)
+            await db.flush()
+            thread_scene_link_ids.append(link.id)
+
+        for rev in sc.revelations:
+            if not rev.description:
+                continue
+            knowers = [cid for cid in _resolve_ids_from_names(rev.characters_who_know, existing_by_name) if cid]
+            row = Revelation(
+                story_id=story_id,
+                scene_id=scene.id,
+                chapter_id=chapter.id,
+                description=rev.description,
+                kind=rev.kind or "revelation",
+                characters_who_know=knowers,
+                reader_knows=rev.reader_knows,
+                notes=rev.notes or "",
+                confidence=rev.confidence,
+            )
+            db.add(row)
+            await db.flush()
+            revelation_ids.append(row.id)
+
+    # 10. Refresh deterministic voice fingerprints now that chapter text exists.
+    try:
+        from app.services import voice_service
+
+        await voice_service.rebuild_profiles(db, story_id)
+    except Exception as e:
+        log.debug("voice profile rebuild failed: %s", e)
+
+    # 11. Mark every open draft for this story as approved so the next Flow
     # Writing session starts on a blank slate (the work that was in progress
     # has now been committed as a real chapter).
     open_drafts = (await db.execute(
@@ -480,4 +830,4 @@ async def approve(
     except Exception as e:
         log.warning("graph reprojection failed: %s", e)
 
-    return chapter, new_char_ids, added_themes, version.version_no
+    return chapter, new_char_ids, added_themes, version.version_no, scene_ids, revelation_ids, thread_scene_link_ids

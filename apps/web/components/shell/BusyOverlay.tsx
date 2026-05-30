@@ -6,6 +6,7 @@ import { Loader2, Sparkles } from "lucide-react";
 // Any AI mutation should be tagged: mutationKey: ["llm", "<name>"]
 const LABELS: Record<string, string> = {
   "flow.polish": "Shaping your scene…",
+  "flow.enhance": "Checking the language…",
   "flow.extract": "Reading the scene…",
   "flow.skip-polish": "Filing your scene…",
   "flow.approve": "Filing characters, places, threads…",
@@ -19,6 +20,7 @@ const LABELS: Record<string, string> = {
 
 const HINTS: Record<string, string> = {
   "flow.polish": "The model is rewriting your draft as polished prose.",
+  "flow.enhance": "Detecting the language and improving grammar, word choice, and flow — story unchanged.",
   "flow.extract": "The model is reading the scene and listing characters, places, themes, events.",
   "flow.skip-polish": "The model is listing characters, places, themes, events from your text.",
   "flow.approve": "Adding new entities to your story and snapshotting the version.",

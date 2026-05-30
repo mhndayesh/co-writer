@@ -2,7 +2,7 @@
 import { useParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Plus, Trash2, Link as LinkIcon, X } from "lucide-react";
+import { Plus, Trash2, Link as LinkIcon, X, RefreshCcw } from "lucide-react";
 import * as api from "@/lib/api";
 import { Btn, Card, FG, Inp, PageHdr, Sel, Ta, Tag } from "@/components/ui/Primitives";
 import { useDebouncedSave } from "@/lib/debounce";
@@ -16,10 +16,12 @@ export default function CharactersPage() {
   const qc = useQueryClient();
 
   const { data: characters } = useQuery({ queryKey: ["characters", storyId], queryFn: () => api.listCharacters(storyId) });
+  const { data: voiceProfiles } = useQuery({ queryKey: ["voice", storyId], queryFn: () => api.listVoiceProfiles(storyId) });
   const [activeId, setActiveId] = useState<string | null>(null);
   useEffect(() => { if (!activeId && characters && characters.length > 0) setActiveId(characters[0].id); }, [characters, activeId]);
 
   const active = useMemo(() => characters?.find((c: any) => c.id === activeId) || null, [characters, activeId]);
+  const activeVoice = useMemo(() => voiceProfiles?.find((p: any) => p.character_id === activeId) || null, [voiceProfiles, activeId]);
   const [draft, setDraft] = useState<any>(null);
   useEffect(() => { setDraft(active ? { ...active } : null); }, [active]);
 
@@ -34,6 +36,10 @@ export default function CharactersPage() {
   const del = useMutation({
     mutationFn: () => api.deleteCharacter(storyId, activeId!),
     onSuccess: () => { setActiveId(null); qc.invalidateQueries({ queryKey: ["characters", storyId] }); },
+  });
+  const rebuildVoice = useMutation({
+    mutationFn: () => api.rebuildVoiceProfiles(storyId),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["voice", storyId] }),
   });
 
   useDebouncedSave(draft, 900, (d) => {
@@ -111,6 +117,34 @@ export default function CharactersPage() {
                 <FG label="Fatal flaw"><Ta rows={3} value={draft.flaw || ""} onChange={e => setDraft({ ...draft, flaw: e.target.value })} /></FG>
               </div>
               <FG label="Character arc"><Ta value={draft.arc || ""} onChange={e => setDraft({ ...draft, arc: e.target.value })} /></FG>
+            </Card>
+
+            <Card className="mb-4">
+              <div className="flex items-center justify-between gap-2 mb-3">
+                <h3 className="font-display text-lg">Voice Fingerprint</h3>
+                <Btn variant="ghost" disabled={rebuildVoice.isPending} onClick={() => rebuildVoice.mutate()}><RefreshCcw size={14}/> Rebuild</Btn>
+              </div>
+              {activeVoice && activeVoice.sample_count > 0 ? (
+                <>
+                  <div className="grid gap-2 md:grid-cols-4">
+                    <Tag color="gold">Samples {activeVoice.sample_count}</Tag>
+                    <Tag color="muted">Avg {activeVoice.avg_sentence_words} words</Tag>
+                    <Tag color="muted">Questions {Math.round(activeVoice.question_rate * 100)}%</Tag>
+                    <Tag color="muted">Exclaims {Math.round(activeVoice.exclamation_rate * 100)}%</Tag>
+                  </div>
+                  <div className="mt-3 grid gap-3 md:grid-cols-2 text-sm text-ink-text2">
+                    <p>Vocabulary variety: <strong className="text-ink-text">{Math.round(activeVoice.vocabulary_variety * 100)}%</strong></p>
+                    <p>Dialogue share: <strong className="text-ink-text">{Math.round(activeVoice.dialogue_share * 100)}%</strong></p>
+                  </div>
+                  {(activeVoice.repeated_phrases || []).length > 0 && (
+                    <div className="mt-3 flex flex-wrap gap-1">
+                      {activeVoice.repeated_phrases.map((p: string) => <Tag key={p} color="rose">{p}</Tag>)}
+                    </div>
+                  )}
+                </>
+              ) : (
+                <p className="text-sm text-ink-text3">No attributed dialogue samples yet.</p>
+              )}
             </Card>
 
             <Card>

@@ -145,6 +145,12 @@ export async function flowApprove(id: string, payload: {
     { method: "POST", body: JSON.stringify(payload) },
   );
 }
+export async function flowEnhance(id: string, raw: string) {
+  return request<{ language: string; enhanced: string; notes: string; fallback: boolean }>(
+    `/v1/stories/${id}/flow/enhance`,
+    { method: "POST", body: JSON.stringify({ raw }) },
+  );
+}
 export async function flowSaveDraft(id: string, payload: any) {
   return request<{ draft_id: string }>(`/v1/stories/${id}/flow/draft`, { method: "POST", body: JSON.stringify(payload) });
 }
@@ -162,8 +168,8 @@ export async function writingCompanion(id: string, instruction: string, chapterI
 }
 
 // ── Story Check ──────────────────────────────────────────────────────
-export async function storyCheck(id: string, chapterId: string) {
-  return request<any>(`/v1/stories/${id}/check`, { method: "POST", body: JSON.stringify({ chapter_id: chapterId }) });
+export async function storyCheck(id: string, chapterId: string | null, passType = "logic") {
+  return request<any>(`/v1/stories/${id}/check`, { method: "POST", body: JSON.stringify({ chapter_id: chapterId, pass_type: passType }) });
 }
 
 // ── Graph ────────────────────────────────────────────────────────────
@@ -198,29 +204,41 @@ export async function createScene(id: string, payload: any) { return (await requ
 export async function patchScene(id: string, sceneId: string, patch: any) { return (await request<{ scene: any }>(`/v1/stories/${id}/scenes/${sceneId}`, { method: "PATCH", body: JSON.stringify(patch) })).scene; }
 export async function deleteScene(id: string, sceneId: string) { return request(`/v1/stories/${id}/scenes/${sceneId}`, { method: "DELETE" }); }
 
+export async function listTimeline(id: string, order: "story" | "reading" = "story") {
+  return (await request<{ scenes: any[] }>(`/v1/stories/${id}/timeline?order=${order}`)).scenes;
+}
+export async function listWeave(id: string) { return request<{ threads: any[]; scenes: any[] }>(`/v1/stories/${id}/weave`); }
+export async function listRevelations(id: string) { return (await request<{ revelations: any[] }>(`/v1/stories/${id}/revelations`)).revelations; }
+export async function createRevelation(id: string, payload: any) {
+  return (await request<{ revelation: any }>(`/v1/stories/${id}/revelations`, { method: "POST", body: JSON.stringify(payload) })).revelation;
+}
+export async function patchRevelation(id: string, revelationId: string, patch: any) {
+  return (await request<{ revelation: any }>(`/v1/stories/${id}/revelations/${revelationId}`, { method: "PATCH", body: JSON.stringify(patch) })).revelation;
+}
+export async function deleteRevelation(id: string, revelationId: string) {
+  return request(`/v1/stories/${id}/revelations/${revelationId}`, { method: "DELETE" });
+}
+export async function listVoiceProfiles(id: string) { return (await request<{ profiles: any[] }>(`/v1/stories/${id}/voice`)).profiles; }
+export async function rebuildVoiceProfiles(id: string) {
+  return (await request<{ profiles: any[] }>(`/v1/stories/${id}/voice/rebuild`, { method: "POST" })).profiles;
+}
+
 export async function listThreads(id: string) { return (await request<{ threads: any[] }>(`/v1/stories/${id}/threads`)).threads; }
 export async function createThread(id: string, payload: any) { return (await request<{ thread: any }>(`/v1/stories/${id}/threads`, { method: "POST", body: JSON.stringify(payload) })).thread; }
 export async function patchThread(id: string, threadId: string, patch: any) { return (await request<{ thread: any }>(`/v1/stories/${id}/threads/${threadId}`, { method: "PATCH", body: JSON.stringify(patch) })).thread; }
 export async function deleteThread(id: string, threadId: string) { return request(`/v1/stories/${id}/threads/${threadId}`, { method: "DELETE" }); }
 
 // ── LLM ──────────────────────────────────────────────────────────────
-export type LLMProfile = { provider: string; base_url: string; model: string; embed_model: string; has_api_key: boolean };
-export type LLMConfig = {
-  mode: "single" | "split" | "custom";
-  default: LLMProfile;
-  creative?: LLMProfile | null;
-  technical?: LLMProfile | null;
-  embedding?: LLMProfile | null;
-  tasks: Record<string, LLMProfile>;
-};
-export type LLMStatusItem = { provider: string; model: string; reachable: boolean; detail: string; role: string };
+export type LaneConfig = { provider: string; base_url: string; model: string; embed_model: string; has_api_key: boolean };
+export type LLMConfig = { creative: LaneConfig; technical: LaneConfig; embedding: LaneConfig };
+export type LLMStatusItem = { provider: string; model: string; reachable: boolean; detail: string; lane: string };
+export type ProviderInfo = { name: string; base_url: string; default_model: string; default_embed_model: string; can_embed: boolean };
 
-export async function llmGetSettings() { return request<any>("/v1/llm/settings"); }
-export async function llmPutSettings(payload: any) { return request<any>("/v1/llm/settings", { method: "PUT", body: JSON.stringify(payload) }); }
 export async function llmGetConfig() { return request<LLMConfig>("/v1/llm/config"); }
 export async function llmPutConfig(payload: any) { return request<LLMConfig>("/v1/llm/config", { method: "PUT", body: JSON.stringify(payload) }); }
+export async function llmProviders() { return (await request<{ providers: ProviderInfo[] }>("/v1/llm/providers")).providers; }
 export async function llmStatus() { return request<LLMStatusItem & { statuses: LLMStatusItem[] }>("/v1/llm/status"); }
-export async function llmTest(opts: { prompt?: string; role?: string; page?: string } = {}) {
+export async function llmTest(opts: { prompt?: string; lane?: string } = {}) {
   return request<{ text: string; model: string; fallback: boolean }>("/v1/llm/test", { method: "POST", body: JSON.stringify(opts) });
 }
 

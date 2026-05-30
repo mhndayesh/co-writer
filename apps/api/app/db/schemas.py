@@ -206,6 +206,8 @@ class ExtractedCharacter(BaseModel):
     name: str
     role: str = ""
     note: str = ""
+    status: str = ""       # alive|dead|unknown|missing|transformed — empty = no change
+    arc_note: str = ""     # development observed in this scene — appended to character arc
     is_new: bool = True
     existing_id: str | None = None
 
@@ -239,6 +241,36 @@ class ExtractedThread(BaseModel):
     status: str = "open"
 
 
+class ExtractedRevelation(BaseModel):
+    description: str
+    kind: str = "revelation"
+    characters_who_know: list[str] = []
+    reader_knows: bool = False
+    notes: str = ""
+    confidence: float = 1.0
+
+
+class ExtractedScene(BaseModel):
+    ordinal: int = 0
+    title: str = ""
+    beat: str = ""
+    summary: str = ""
+    goal: str = ""
+    conflict: str = ""
+    outcome: str = ""
+    pov: str = ""
+    location: str = ""
+    characters: list[str] = []
+    plot_threads: list[str] = []
+    time_anchor: str = ""
+    time_sort_key: float | None = None
+    duration_hint: str = ""
+    sensory_palette: dict[str, int] = {}
+    revelations: list[ExtractedRevelation] = []
+    source_excerpt: str = ""
+    content: str = ""
+
+
 class FlowExtractResponse(BaseModel):
     title_suggestion: str = ""
     summary: str = ""
@@ -251,6 +283,7 @@ class FlowExtractResponse(BaseModel):
     locations: list[ExtractedLocation] = []
     factions: list[ExtractedFaction] = []
     threads: list[ExtractedThread] = []
+    scenes: list[ExtractedScene] = []
     fallback: bool = False
 
 
@@ -273,7 +306,23 @@ class FlowApproveResponse(BaseModel):
     chapter_id: str
     new_character_ids: list[str] = []
     added_themes: list[str] = []
+    scene_ids: list[str] = []
+    revelation_ids: list[str] = []
+    thread_scene_link_ids: list[str] = []
     version_no: int
+
+
+# ── Language Enhancer ───────────────────────────────────────────────────
+
+class FlowEnhanceRequest(BaseModel):
+    raw: str
+
+
+class FlowEnhanceResponse(BaseModel):
+    language: str = ""
+    enhanced: str = ""
+    notes: str = ""
+    fallback: bool = False
 
 
 # ── Writing Companion (Chapters tab) ────────────────────────────────────
@@ -290,8 +339,12 @@ class CompanionResponse(BaseModel):
 
 # ── Story Check ─────────────────────────────────────────────────────────
 
+RevisionPass = Literal["structure", "character", "logic", "dialogue", "tightening"]
+
+
 class StoryCheckRequest(BaseModel):
-    chapter_id: str
+    chapter_id: str | None = None
+    pass_type: RevisionPass = "logic"
 
 
 class CheckFinding(BaseModel):
@@ -299,10 +352,13 @@ class CheckFinding(BaseModel):
     title: str
     detail: str
     suggestion: str = ""
+    chapter_id: str | None = None
+    scene_id: str | None = None
 
 
 class StoryCheckResponse(BaseModel):
-    chapter_id: str
+    chapter_id: str | None = None
+    pass_type: RevisionPass = "logic"
     findings: list[CheckFinding] = []
     strengths: list[str] = []
     severity_buckets: dict = {}
@@ -314,7 +370,7 @@ class StoryCheckResponse(BaseModel):
 class GraphNode(BaseModel):
     id: str
     label: str
-    kind: Literal["character", "chapter", "theme", "location", "faction"]
+    kind: Literal["character", "chapter", "theme", "location", "faction", "scene", "thread", "revelation"]
     color: str = ""
     size: int = 1
     data: dict = {}
@@ -335,35 +391,11 @@ class GraphView(BaseModel):
 
 # ── LLM Settings ────────────────────────────────────────────────────────
 
-class LLMSettingsIn(BaseModel):
-    provider: Literal["lmstudio", "openai", "anthropic", "openrouter", "gemini"]
-    base_url: str = ""
-    model: str = ""
-    embed_model: str = ""
-    api_key: str = ""  # plaintext on the wire, encrypted at rest
-
-
-class LLMSettingsOut(BaseModel):
-    provider: str
-    base_url: str
-    model: str
-    embed_model: str
-    has_api_key: bool
-
-
-class LLMStatus(BaseModel):
-    provider: str
-    model: str
-    reachable: bool
-    detail: str = ""
-    role: str = "default"
-
-
-LLMMode = Literal["single", "split", "custom"]
 ProviderName = Literal["lmstudio", "openai", "anthropic", "openrouter", "gemini"]
+LaneName = Literal["creative", "technical", "embedding"]
 
 
-class LLMProfileIn(BaseModel):
+class LaneConfigIn(BaseModel):
     provider: ProviderName
     base_url: str = ""
     model: str = ""
@@ -371,7 +403,7 @@ class LLMProfileIn(BaseModel):
     api_key: str = ""  # plaintext on the wire; blank = keep existing
 
 
-class LLMProfileOut(BaseModel):
+class LaneConfigOut(BaseModel):
     provider: str = ""
     base_url: str = ""
     model: str = ""
@@ -380,22 +412,31 @@ class LLMProfileOut(BaseModel):
 
 
 class LLMConfigIn(BaseModel):
-    mode: LLMMode = "single"
-    default: LLMProfileIn | None = None
-    creative: LLMProfileIn | None = None
-    technical: LLMProfileIn | None = None
-    embedding: LLMProfileIn | None = None
-    # page -> profile, e.g. {"flow.polish": {...}}
-    tasks: dict[str, LLMProfileIn] = {}
+    creative: LaneConfigIn | None = None
+    technical: LaneConfigIn | None = None
+    embedding: LaneConfigIn | None = None
 
 
 class LLMConfigOut(BaseModel):
-    mode: LLMMode
-    default: LLMProfileOut
-    creative: LLMProfileOut | None = None
-    technical: LLMProfileOut | None = None
-    embedding: LLMProfileOut | None = None
-    tasks: dict[str, LLMProfileOut] = {}
+    creative: LaneConfigOut
+    technical: LaneConfigOut
+    embedding: LaneConfigOut
+
+
+class LLMStatus(BaseModel):
+    provider: str
+    model: str
+    reachable: bool
+    detail: str = ""
+    lane: str = "creative"
+
+
+class ProviderInfo(BaseModel):
+    name: str
+    base_url: str = ""
+    default_model: str = ""
+    default_embed_model: str = ""
+    can_embed: bool = True
 
 
 # ── Locations / Factions / Threads / Scenes ─────────────────────────────
@@ -444,10 +485,137 @@ class SceneCardIn(BaseModel):
     chapter_id: str | None = None
     ordinal: int = 0
     beat: str = ""
+    title: str = ""
+    summary: str = ""
+    goal: str = ""
+    conflict: str = ""
+    outcome: str = ""
+    pov_character_id: str | None = None
+    location_id: str | None = None
+    character_ids: list[str] = []
+    plot_thread_ids: list[str] = []
+    time_anchor: str = ""
+    time_sort_key: float | None = None
+    duration_hint: str = ""
+    sensory_palette: dict[str, int] = {}
+    source_excerpt: str = ""
     content: str = ""
+
+
+class SceneCardPatch(BaseModel):
+    chapter_id: str | None = None
+    ordinal: int | None = None
+    beat: str | None = None
+    title: str | None = None
+    summary: str | None = None
+    goal: str | None = None
+    conflict: str | None = None
+    outcome: str | None = None
+    pov_character_id: str | None = None
+    location_id: str | None = None
+    character_ids: list[str] | None = None
+    plot_thread_ids: list[str] | None = None
+    time_anchor: str | None = None
+    time_sort_key: float | None = None
+    duration_hint: str | None = None
+    sensory_palette: dict[str, int] | None = None
+    source_excerpt: str | None = None
+    content: str | None = None
 
 
 class SceneCardOut(SceneCardIn):
     model_config = ConfigDict(from_attributes=True)
     id: str
     story_id: str
+
+
+class RevelationIn(BaseModel):
+    scene_id: str | None = None
+    chapter_id: str | None = None
+    description: str
+    kind: str = "revelation"
+    characters_who_know: list[str] = []
+    reader_knows: bool = False
+    notes: str = ""
+    confidence: float = 1.0
+
+
+class RevelationPatch(BaseModel):
+    scene_id: str | None = None
+    chapter_id: str | None = None
+    description: str | None = None
+    kind: str | None = None
+    characters_who_know: list[str] | None = None
+    reader_knows: bool | None = None
+    notes: str | None = None
+    confidence: float | None = None
+
+
+class RevelationOut(RevelationIn):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    story_id: str
+    created_at: datetime
+
+
+class PlotThreadSceneLinkOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    story_id: str
+    thread_id: str
+    scene_id: str
+    chapter_id: str | None
+    status: str
+    strength: float
+    evidence: str
+
+
+class TimelineSceneOut(SceneCardOut):
+    chapter_number: int | None = None
+    chapter_title: str = ""
+    pov_name: str = ""
+    location_name: str = ""
+    character_names: list[str] = []
+    plot_thread_names: list[str] = []
+
+
+class WeaveCellOut(BaseModel):
+    scene_id: str
+    chapter_id: str | None = None
+    chapter_number: int | None = None
+    scene_ordinal: int = 0
+    scene_title: str = ""
+    status: str = "touch"
+    strength: float = 1.0
+    evidence: str = ""
+
+
+class WeaveThreadOut(BaseModel):
+    thread_id: str
+    name: str
+    status: str
+    description: str = ""
+    cells: list[WeaveCellOut] = []
+    dormant_after: int | None = None
+
+
+class WeaveOut(BaseModel):
+    threads: list[WeaveThreadOut]
+    scenes: list[TimelineSceneOut]
+
+
+class CharacterVoiceProfileOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    story_id: str
+    character_id: str
+    sample_count: int
+    dialogue_words: int
+    avg_sentence_words: float
+    question_rate: float
+    exclamation_rate: float
+    vocabulary_variety: float
+    dialogue_share: float
+    repeated_phrases: list[str]
+    stats: dict
+    updated_at: datetime

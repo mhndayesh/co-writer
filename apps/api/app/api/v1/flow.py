@@ -3,17 +3,15 @@ from sqlalchemy import desc, select
 
 from app.core.deps import CurrentUser, DB, get_user_story
 from app.core.errors import envelope_ok
-from app.db.models import Chapter, FlowDraft
+from app.db.models import FlowDraft
 from app.db.schemas import (
-    ChapterOut,
     CompanionRequest,
     CompanionResponse,
     FlowApproveRequest,
     FlowApproveResponse,
+    FlowEnhanceRequest,
     FlowExtractRequest,
-    FlowExtractResponse,
     FlowPolishRequest,
-    FlowPolishResponse,
 )
 from app.services import flow_service, llm_service
 from app.services.context_builder import build_story_context
@@ -40,13 +38,25 @@ async def flow_extract(story_id: str, payload: FlowExtractRequest, user: Current
 @router.post("/{story_id}/flow/approve")
 async def flow_approve(story_id: str, payload: FlowApproveRequest, user: CurrentUser, db: DB):
     await get_user_story(story_id, user, db)
-    chapter, new_ids, themes, version_no = await flow_service.approve(db, user, story_id, payload)
+    chapter, new_ids, themes, version_no, scene_ids, revelation_ids, link_ids = await flow_service.approve(db, user, story_id, payload)
     return envelope_ok(FlowApproveResponse(
         chapter_id=chapter.id,
         new_character_ids=new_ids,
         added_themes=themes,
+        scene_ids=scene_ids,
+        revelation_ids=revelation_ids,
+        thread_scene_link_ids=link_ids,
         version_no=version_no,
     ).model_dump())
+
+
+@router.post("/{story_id}/flow/enhance")
+async def flow_enhance(story_id: str, payload: FlowEnhanceRequest, user: CurrentUser, db: DB):
+    """Language-enhance the author's own text without altering the story."""
+    await get_user_story(story_id, user, db)
+    resp = await flow_service.enhance(db, user, story_id, payload.raw)
+    await db.commit()
+    return envelope_ok(resp.model_dump())
 
 
 @router.post("/{story_id}/flow/draft")

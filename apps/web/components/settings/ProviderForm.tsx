@@ -41,19 +41,19 @@ export function emptyProvider(p: Provider = "lmstudio"): ProviderValue {
 export function ProviderForm({
   value,
   onChange,
-  testRole,
+  lane,
   showEmbed = true,
   status,
 }: {
   value: ProviderValue;
   onChange: (v: ProviderValue) => void;
-  testRole: string;       // "default" | "creative" | "technical" | "embedding" | "task:<page>"
+  lane: "creative" | "technical" | "embedding";
   showEmbed?: boolean;
   status?: { reachable: boolean; detail: string; provider: string; model: string };
 }) {
   const test = useMutation({
     mutationKey: ["llm", "llm.test"],
-    mutationFn: () => api.llmTest({ role: testRole }),
+    mutationFn: () => api.llmTest({ lane }),
   });
 
   function applyProvider(p: Provider) {
@@ -61,7 +61,7 @@ export function ProviderForm({
   }
 
   const isAnthropic = value.provider === "anthropic";
-  const isEmbeddingSlot = testRole === "embedding";
+  const isEmbeddingSlot = lane === "embedding";
   const cantEmbed = EMBED_INCAPABLE.includes(value.provider);
   // Embedding slots only allow embed-capable providers.
   const providerOptions = (Object.keys(PROVIDER_LABELS) as Provider[]).filter(

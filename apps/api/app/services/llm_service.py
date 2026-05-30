@@ -140,8 +140,6 @@ def _repair_truncated_json(t: str) -> str | None:
     stack: list[str] = []
     in_string = False
     escape = False
-    last_complete = 0  # position of last char that left us at a clean state
-
     for i, ch in enumerate(t):
         if in_string:
             if escape:
@@ -160,8 +158,6 @@ def _repair_truncated_json(t: str) -> str | None:
                 stack.pop()
             else:
                 return None  # mismatched — can't safely repair
-        if not in_string and not stack:
-            last_complete = i + 1
 
     # Trim trailing partial garbage after the last clean comma/colon
     s = t
@@ -178,13 +174,19 @@ def _repair_truncated_json(t: str) -> str | None:
         esc = False
         for i, ch in enumerate(s):
             if in_s:
-                if esc: esc = False
-                elif ch == "\\": esc = True
-                elif ch == '"': in_s = False
+                if esc:
+                    esc = False
+                elif ch == "\\":
+                    esc = True
+                elif ch == '"':
+                    in_s = False
                 continue
-            if ch == '"': in_s = True
-            elif ch in "{[": depth += 1
-            elif ch in "}]": depth -= 1
+            if ch == '"':
+                in_s = True
+            elif ch in "{[":
+                depth += 1
+            elif ch in "}]":
+                depth -= 1
             elif ch == "," and depth == len(stack):
                 cut = i
         if cut > 0:

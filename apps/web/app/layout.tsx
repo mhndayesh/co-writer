@@ -4,8 +4,8 @@ import { Providers } from "@/components/shell/Providers";
 import { ThemeBoot } from "@/components/shell/ThemeBoot";
 
 export const metadata: Metadata = {
-  title: "G-Ink Novel Studio",
-  description: "An AI-powered writing studio — write freely; the craft happens behind the scenes.",
+  title: "Co-Writer — by G-Ink Studio",
+  description: "Your AI co-writer. Write freely; the craft happens behind the scenes.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

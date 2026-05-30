@@ -7,15 +7,23 @@ import * as api from "@/lib/api";
 import { Btn, Card, FG, PageHdr, Sel, Tag } from "@/components/ui/Primitives";
 
 const SEVERITY_TAG: Record<string, any> = { high: { color: "red", icon: AlertOctagon }, medium: { color: "gold", icon: AlertTriangle }, low: { color: "muted", icon: Info } };
+const PASSES = [
+  ["logic", "Logic / continuity"],
+  ["structure", "Structure"],
+  ["character", "Character"],
+  ["dialogue", "Dialogue"],
+  ["tightening", "Tightening"],
+];
 
 export default function CheckPage() {
   const { storyId } = useParams<{ storyId: string }>();
   const { data: chapters } = useQuery({ queryKey: ["chapters", storyId], queryFn: () => api.listChapters(storyId) });
   const [chapterId, setChapterId] = useState("");
+  const [passType, setPassType] = useState("logic");
 
   const run = useMutation({
-    mutationKey: ["llm", "story-check"],
-    mutationFn: () => api.storyCheck(storyId, chapterId),
+    mutationKey: ["llm", "story-check", passType],
+    mutationFn: () => api.storyCheck(storyId, chapterId, passType),
   });
 
   return (
@@ -23,11 +31,16 @@ export default function CheckPage() {
       <PageHdr title="◇ Story Check" subtitle="Reads the chapter against your world, cast, and history — uses Graph-RAG for subtle continuity slips." />
 
       <Card className="mb-4">
-        <div className="grid gap-3 md:grid-cols-[1fr_auto] items-end">
+        <div className="grid gap-3 md:grid-cols-[1fr_220px_auto] items-end">
           <FG label="Chapter to check">
             <Sel value={chapterId} onChange={e => setChapterId(e.target.value)}>
               <option value="">— pick a chapter —</option>
               {(chapters || []).map((c: any) => <option key={c.id} value={c.id}>Ch{c.number}. {c.title}</option>)}
+            </Sel>
+          </FG>
+          <FG label="Revision pass">
+            <Sel value={passType} onChange={e => setPassType(e.target.value)}>
+              {PASSES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
             </Sel>
           </FG>
           <Btn variant="primary" disabled={!chapterId || run.isPending} onClick={() => run.mutate()} className="mb-3">
@@ -41,6 +54,7 @@ export default function CheckPage() {
           <Card className="mb-4">
             <h3 className="font-display text-lg mb-2">Severity</h3>
             <div className="flex gap-2">
+              <Tag color="green">{run.data.pass_type || passType}</Tag>
               <Tag color="red">High · {run.data.severity_buckets?.high ?? 0}</Tag>
               <Tag color="gold">Medium · {run.data.severity_buckets?.medium ?? 0}</Tag>
               <Tag color="muted">Low · {run.data.severity_buckets?.low ?? 0}</Tag>

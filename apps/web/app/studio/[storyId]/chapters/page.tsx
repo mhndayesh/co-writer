@@ -1,10 +1,10 @@
 "use client";
 import { useParams } from "next/navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Plus, Trash2, Sparkles, Save } from "lucide-react";
+import { Plus, Trash2, Sparkles } from "lucide-react";
 import * as api from "@/lib/api";
-import { Btn, Card, FG, Inp, PageHdr, Ta } from "@/components/ui/Primitives";
+import { Btn, Card, FG, Inp, PageHdr, Ta, Tag } from "@/components/ui/Primitives";
 import { useDebouncedSave } from "@/lib/debounce";
 
 export default function ChaptersPage() {
@@ -14,6 +14,8 @@ export default function ChaptersPage() {
   const { data: chapters } = useQuery({ queryKey: ["chapters", storyId], queryFn: () => api.listChapters(storyId) });
   const { data: characters } = useQuery({ queryKey: ["characters", storyId], queryFn: () => api.listCharacters(storyId) });
   const { data: locations } = useQuery({ queryKey: ["locations", storyId], queryFn: () => api.listLocations(storyId) });
+  const { data: scenes } = useQuery({ queryKey: ["scenes", storyId], queryFn: () => api.listScenes(storyId) });
+  const { data: threads } = useQuery({ queryKey: ["threads", storyId], queryFn: () => api.listThreads(storyId) });
 
   const [activeId, setActiveId] = useState<string | null>(null);
   useEffect(() => {
@@ -21,6 +23,13 @@ export default function ChaptersPage() {
   }, [chapters, activeId]);
 
   const active = useMemo(() => chapters?.find((c: any) => c.id === activeId) || null, [chapters, activeId]);
+  const activeScenes = useMemo(
+    () => (scenes || []).filter((s: any) => s.chapter_id === activeId).sort((a: any, b: any) => (a.ordinal || 0) - (b.ordinal || 0)),
+    [scenes, activeId],
+  );
+  const threadById = useMemo(() => Object.fromEntries((threads || []).map((t: any) => [t.id, t])), [threads]);
+  const charById = useMemo(() => Object.fromEntries((characters || []).map((c: any) => [c.id, c])), [characters]);
+  const locById = useMemo(() => Object.fromEntries((locations || []).map((l: any) => [l.id, l])), [locations]);
 
   const create = useMutation({
     mutationFn: () => api.createChapter(storyId, { title: "New chapter", content: "" }),
@@ -120,6 +129,33 @@ export default function ChaptersPage() {
                 <Ta rows={20} value={draft.content || ""} onChange={e => setDraft({ ...draft, content: e.target.value })} className="leading-relaxed text-base" />
               </FG>
             </Card>
+
+            {activeScenes.length > 0 && (
+              <Card className="mb-4">
+                <h3 className="font-display text-lg mb-3">Scene Strip</h3>
+                <div className="grid gap-2 md:grid-cols-2">
+                  {activeScenes.map((s: any) => (
+                    <div key={s.id} className="rounded border border-ink-border bg-ink-surface2/60 p-3">
+                      <div className="flex flex-wrap items-center gap-2 mb-1">
+                        <Tag color="muted">{s.ordinal || 0}</Tag>
+                        <strong>{s.title || s.beat || "Untitled scene"}</strong>
+                      </div>
+                      {s.summary && <p className="text-sm text-ink-text2 mb-2">{s.summary}</p>}
+                      <div className="flex flex-wrap gap-1">
+                        {s.pov_character_id && charById[s.pov_character_id] && <Tag color="gold">POV: {charById[s.pov_character_id].name}</Tag>}
+                        {s.location_id && locById[s.location_id] && <Tag color="rose">{locById[s.location_id].name}</Tag>}
+                        {(s.plot_thread_ids || []).map((tid: string) => threadById[tid] && <Tag key={tid} color="green">{threadById[tid].name}</Tag>)}
+                      </div>
+                      {(s.goal || s.conflict || s.outcome) && (
+                        <p className="text-xs text-ink-text3 mt-2">
+                          {[s.goal && `Goal: ${s.goal}`, s.conflict && `Conflict: ${s.conflict}`, s.outcome && `Outcome: ${s.outcome}`].filter(Boolean).join(" · ")}
+                        </p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </Card>
+            )}
 
             <Card>
               <h3 className="font-display text-lg mb-2">Writing Companion</h3>

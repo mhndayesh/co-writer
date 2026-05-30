@@ -14,8 +14,6 @@ os.environ.setdefault("LMSTUDIO_BASE_URL", "http://127.0.0.1:65535/v1")  # guara
 os.environ.setdefault("CORS_ORIGINS", "http://localhost:3000")
 # Leave NEO4J_URI / QDRANT_URL unset → services fall back
 
-import asyncio
-import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 

@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 
-const ForceGraph2D = dynamic(() => import("react-force-graph-2d"), { ssr: false });
+const ForceGraph2D = dynamic(() => import("react-force-graph-2d"), { ssr: false }) as any;
 
 export type GraphData = {
   nodes: Array<{ id: string; label: string; kind: string; color: string; size: number }>;
@@ -26,7 +26,6 @@ export function StoryMap({ data }: { data: GraphData }) {
 
   return (
     <div ref={ref} className="w-full h-[70vh] bg-ink-surface border border-ink-border rounded">
-      {/* @ts-expect-error: dynamic import */}
       <ForceGraph2D
         graphData={data}
         width={size.w}

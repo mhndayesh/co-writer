@@ -75,6 +75,7 @@ class FallbackProvider(LLMProvider):
                     "locations": [],
                     "factions": [],
                     "threads": [],
+                    "scenes": [],
                 }
                 return ChatResponse(text=json.dumps(payload), model="fallback-stub")
             if _looks_like_check(messages):
