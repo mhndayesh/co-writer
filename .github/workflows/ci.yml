@@ -1,10 +1,16 @@
 name: CI / CD
 
+# Manual-only. Railway builds + deploys this repo directly (it does NOT use GitHub
+# Actions), so this VPS-style build→GHCR→SSH pipeline is optional. Leaving it on
+# `push` made every commit try to run Actions — which fails if the GitHub account's
+# Actions billing/spending-limit isn't set. Re-enable the `push:`/`pull_request:`
+# triggers below only if you set up GitHub Actions billing + the VPS deploy secrets.
 on:
-  push:
-    branches: [main, develop]
-  pull_request:
-    branches: [main, develop]
+  workflow_dispatch:
+  # push:
+  #   branches: [main, develop]
+  # pull_request:
+  #   branches: [main, develop]
 
 env:
   REGISTRY: ghcr.io
