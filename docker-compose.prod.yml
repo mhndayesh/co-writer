@@ -93,9 +93,11 @@ services:
   api:
     # `image` is what CI pushes/pulls from GHCR; `build` lets a plain VPS build
     # from source with `docker compose up -d --build` (no registry/CI needed).
+    # Builds the root Dockerfile from the repo-root context (same as Railway).
     image: ghcr.io/${GITHUB_REPO:-local}/api:${IMAGE_TAG:-latest}
     build:
-      context: ./apps/api
+      context: .
+      dockerfile: Dockerfile
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
     mem_limit: 1g
@@ -153,7 +155,8 @@ services:
   arq-worker:
     image: ghcr.io/${GITHUB_REPO:-local}/api:${IMAGE_TAG:-latest}
     build:
-      context: ./apps/api
+      context: .
+      dockerfile: Dockerfile
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
     mem_limit: 1g

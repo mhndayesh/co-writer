@@ -1,0 +1,32 @@
+# Root build context — keep images small + secret-free when building from the repo
+# root (Railway builds from root; the Dockerfile COPYs only apps/api/).
+.git
+.github
+**/.venv
+venv
+**/node_modules
+**/.next
+**/__pycache__
+**/*.pyc
+**/*.pyo
+**/*.egg-info
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+**/.turbo
+**/.env
+**/.env.*
+!**/.env.example
+**/*.db
+**/*.db-*
+**/*.sqlite
+**/*.sqlite3
+apps/api/uploads
+apps/api/tests
+_private
+.run-logs
+caddy
+infra
+*.md
+story_forge.jsx
+docker-compose*.yml
