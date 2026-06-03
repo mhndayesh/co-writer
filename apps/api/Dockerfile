@@ -18,7 +18,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends libgomp1 \
  && rm -rf /var/lib/apt/lists/* \
  && useradd --no-create-home --shell /bin/false gink
 COPY . .
-RUN chmod +x entrypoint.sh
+# COPY preserves host file modes — a stray non-world-readable file would crash the
+# non-root user at import. Force read/traverse for all, then mark the entrypoint exec.
+RUN chmod -R a+rX /app && chmod +x entrypoint.sh
 USER gink
 EXPOSE 8080
 # Migrations run separately (see entrypoint.sh comment). Never run alembic inside

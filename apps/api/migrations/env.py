@@ -10,13 +10,16 @@ from alembic import context
 from app.core.config import get_settings
 from app.db.base import Base
 from app.db import models  # noqa: F401 — registers models on Base.metadata
+from app.db.session import _normalize_db_url  # force +asyncpg on bare postgres URLs
 
 config = context.config
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-config.set_main_option("sqlalchemy.url", get_settings().database_url)
+# Normalize so a provider's bare `postgresql://` (Railway/Render/etc.) gets the
+# asyncpg driver the async migration engine needs.
+config.set_main_option("sqlalchemy.url", _normalize_db_url(get_settings().database_url))
 
 target_metadata = Base.metadata
 

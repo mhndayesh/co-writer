@@ -8,10 +8,25 @@ from app.core.config import get_settings
 
 _settings = get_settings()
 
+
+def _normalize_db_url(url: str) -> str:
+    """Force the asyncpg driver on bare Postgres URLs. Managed hosts (Railway,
+    Render, Heroku, Supabase) hand out `postgresql://` (or legacy `postgres://`),
+    but our async engine needs `postgresql+asyncpg://`. Normalizing here means the
+    operator can paste the provider's URL verbatim and it just works."""
+    if url.startswith("postgres://"):
+        url = "postgresql://" + url[len("postgres://"):]
+    if url.startswith("postgresql://"):
+        url = "postgresql+asyncpg://" + url[len("postgresql://"):]
+    return url
+
+
+DATABASE_URL = _normalize_db_url(_settings.database_url)
+
 connect_args: dict = {}
 pool_kwargs: dict = {}
 
-if _settings.database_url.startswith("sqlite"):
+if DATABASE_URL.startswith("sqlite"):
     connect_args = {"check_same_thread": False}
 else:
     # PostgreSQL connection pool tuning
@@ -23,14 +38,14 @@ else:
     }
 
 engine = create_async_engine(
-    _settings.database_url,
+    DATABASE_URL,
     future=True,
     echo=False,
     connect_args=connect_args,
     **pool_kwargs,
 )
 
-if _settings.database_url.startswith("sqlite"):
+if DATABASE_URL.startswith("sqlite"):
     # SQLite ships with foreign-key enforcement OFF per-connection, so every
     # `ON DELETE CASCADE` / `SET NULL` in the schema is a silent no-op — deleting a
     # story would orphan ~20 child tables. Prod is Postgres (FKs always on), but the
