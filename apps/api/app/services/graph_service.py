@@ -10,6 +10,7 @@ front-end Story Map keeps working.
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import select
@@ -73,6 +74,16 @@ def _get_driver():
     except Exception as e:
         log.warning("neo4j driver init failed: %s", e)
         return None
+
+
+async def close_driver() -> None:
+    """Close the cached Neo4j driver (called on app shutdown)."""
+    global _driver
+    if _driver is not None:
+        try:
+            await _driver.close()
+        finally:
+            _driver = None
 
 
 async def reproject_story(db: AsyncSession, story_id: str) -> dict[str, Any]:
@@ -163,10 +174,13 @@ async def reproject_story(db: AsyncSession, story_id: str) -> dict[str, Any]:
                     rows=occurs_rows, s=story_id,
                 )
 
-        # Mark story.graph_status
+        # Mark story.graph_status + record the successful-sync timestamp so the
+        # reconciler knows this story is current. (Callers must commit — approve
+        # and reconcile_stale_graphs both do.)
         st = await db.get(Story, story_id)
         if st is not None:
             st.graph_status = "ok"
+            st.graph_synced_at = datetime.now(timezone.utc)
         return {"projected": True, "nodes": len(char_rows) + len(chap_rows) + len(loc_rows) + len(fac_rows) + len(theme_rows)}
     except Exception as e:
         log.warning("graph projection failed: %s", e)
@@ -174,6 +188,42 @@ async def reproject_story(db: AsyncSession, story_id: str) -> dict[str, Any]:
         if st is not None:
             st.graph_status = "unavailable"
         return {"projected": False, "reason": str(e)}
+
+
+async def reconcile_stale_graphs(limit: int = 25) -> dict[str, Any]:
+    """Self-heal stories whose Neo4j projection is missing or stale.
+
+    The projection after Flow approve is best-effort: if Neo4j was down (or the
+    process died) the story is left with graph_status != "ok" and Postgres/Neo4j
+    drift with nothing to repair it. This sweep — run on a schedule by the ARQ
+    worker (see app.workers.export_worker) — retries those stories once Neo4j is
+    reachable again, so drift converges back to consistency.
+
+    No-op when Neo4j is unreachable (each reproject short-circuits), so it's safe
+    to run on a timer regardless of Neo4j's state. Opens its own DB session.
+    """
+    driver = _get_driver()
+    if driver is None:
+        return {"reconciled": 0, "reason": "neo4j_unavailable"}
+
+    from app.db.session import SessionLocal
+
+    healed = 0
+    async with SessionLocal() as db:
+        stale = (
+            await db.execute(
+                select(Story.id).where(Story.graph_status != "ok").limit(limit)
+            )
+        ).scalars().all()
+        for sid in stale:
+            res = await reproject_story(db, sid)
+            if res.get("projected"):
+                healed += 1
+            else:
+                # Neo4j went away mid-sweep — stop; the next run retries the rest.
+                break
+        await db.commit()
+    return {"reconciled": healed, "candidates": len(stale)}
 
 
 async def get_view(db: AsyncSession, story_id: str) -> GraphView:

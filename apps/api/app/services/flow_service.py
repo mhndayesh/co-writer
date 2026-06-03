@@ -31,6 +31,7 @@ from app.db.models import (
     User,
     World,
 )
+from app.core.prompt_safety import SECURITY_CLAUSE, fence
 from app.db.schemas import ExtractedScene, FlowApproveRequest, FlowEnhanceResponse, FlowExtractResponse, FlowPolishResponse
 from app.services import llm_service
 from app.services.context_builder import build_story_context
@@ -74,8 +75,13 @@ Return ONLY a single JSON object with EXACTLY these keys:
                 "note": "1-line summary of their role IN THIS SCENE",
                 "status": "alive|dead|unknown|missing|transformed — ONLY set if status CHANGED in this scene; omit or empty string if unchanged",
                 "arc_note": "1-sentence character development observed in this scene — omit or empty if no clear growth/change",
+                "character_id": "the exact [id:…] value from the CAST entry this refers to, or null if brand-new",
                 "is_new": true|false}]
               Mark is_new=true ONLY if absent from the provided CAST.
+              If the character IS in the CAST, copy their exact [id:…] into
+              character_id (drop the "id:" prefix — just the value). This is how we
+              tell apart two cast members who share a name, so always include it for
+              existing characters. Leave character_id null only for is_new=true.
 
   relationships: any relationship between two characters that the scene reveals
               [{"source": "<character name>", "target": "<character name>",
@@ -100,11 +106,24 @@ Return ONLY a single JSON object with EXACTLY these keys:
   threads: open subplots / dangling threads to track
               [{"name": "...", "description": "1-line summary", "status": "open|paid_off|abandoned"}]
 
-  scenes: scene-level beat cards in reading order
+  world_rules: any NEW rules, laws, or facts about how this world works that this scene
+               reveals — things a reader must know to understand the story logic.
+               Only rules that are genuinely revealed FOR THE FIRST TIME in this scene.
+               Empty array if nothing new.
+               ["The smoke entity can mark a person it chooses to observe.", ...]
+
+  world_lore:  NEW background lore, history, or worldbuilding detail revealed in this scene.
+               A single string; empty string if nothing new.
+               "Two years ago the city's crime rate inexplicably collapsed overnight."
+
+  scenes: scene-level beat cards in reading order — extract EVERY distinct scene shift
+              (location change, time jump, or new dramatic beat = new scene card).
+              A chapter with 5–6 beats must have 5–6 cards. Never collapse multiple
+              beats into one.
               [{
                 "ordinal": 1,
                 "title": "short scene title",
-                "beat": "inciting incident|reversal|aftermath|...",
+                "beat": "inciting incident|reversal|aftermath|decision|revelation|conflict|...",
                 "summary": "1 sentence",
                 "goal": "what the POV/scene wants",
                 "conflict": "what blocks the goal",
@@ -113,17 +132,13 @@ Return ONLY a single JSON object with EXACTLY these keys:
                 "location": "<location name>",
                 "characters": ["<character name>", ...],
                 "plot_threads": ["<thread name>", ...],
-                "time_anchor": "story-time label if stated, e.g. 'three days later'",
-                "time_sort_key": "a chronological number (e.g. story-day 1, 2, 3…) — MUST be consistent with existing scene time_key values shown in STORY CONTEXT; null if no clear timeline position",
-                "duration_hint": "minutes|hours|overnight|...",
-                "sensory_palette": {"sight": 0, "sound": 0, "smell": 0, "taste": 0, "touch": 0},
-                "revelations": [
-                  {"description": "...", "kind": "revelation|secret|clue|lie|dramatic_irony",
-                   "characters_who_know": ["<character name>", ...],
-                   "reader_knows": true|false, "notes": "", "confidence": 0.0}
-                ],
-                "source_excerpt": "short excerpt grounding the card",
-                "content": "optional scene card note"
+                "time_anchor": "story-time label if stated e.g. '7pm'",
+                "time_sort_key": null,
+                "duration_hint": "minutes|hours|...",
+                "sensory_palette": {"sight": 0-100, "sound": 0-100, "smell": 0-100, "taste": 0-100, "touch": 0-100},
+                "revelations": [],
+                "source_excerpt": "1–2 sentence excerpt",
+                "content": ""
               }]
 
 Rules:
@@ -131,6 +146,9 @@ Rules:
 - Do NOT extract section headers from the STORY CONTEXT (e.g. "WORLD", "CAST", "CHAPTERS")
   as characters or anything else — those are formatting, not story content.
 - If a field has nothing, return an empty array (NEVER omit a key).
+- sensory_palette values are integers 0–100 representing how strongly that sense is engaged
+  in the scene (0 = absent, 100 = overwhelming). Never leave all five at 0 — every scene
+  engages at least sight and usually sound. Base the scores on the actual prose.
 - Return ONLY the JSON object — no prose, no code fences, no markdown."""
 
 
@@ -154,7 +172,8 @@ Return ONLY a single JSON object with these keys:
 async def enhance(db: AsyncSession, user: User, story_id: str, raw: str) -> FlowEnhanceResponse:
     """Language-enhance the author's own text without changing the story."""
     resp, fb = await llm_service.run(
-        db, user, page="flow.enhance", system=ENHANCE_SYSTEM, user_msg=raw,
+        db, user, page="flow.enhance", system=ENHANCE_SYSTEM + "\n\n" + SECURITY_CLAUSE,
+        user_msg="AUTHOR TEXT TO ENHANCE:\n" + fence("author_text", raw),
         json_mode=True, temperature=0.2, story_id=story_id,
     )
     parsed = llm_service.parse_json(resp.text) or {}
@@ -209,38 +228,82 @@ def _clean_sort_key(value: object) -> float | None:
         return None
 
 
-async def polish(db: AsyncSession, user: User, story_id: str, raw: str, notes: str = "") -> FlowPolishResponse:
-    ctx = await build_story_context(db, story_id)
-    user_msg = f"STORY CONTEXT:\n{ctx}\n\nRAW DRAFT:\n{raw}"
+async def polish(
+    db: AsyncSession,
+    user: User,
+    story_id: str,
+    raw: str,
+    notes: str = "",
+    *,
+    scene_character_ids: list[str] | None = None,
+    scene_location_id: str | None = None,
+) -> FlowPolishResponse:
+    # Scene setup (optional): pin the in-scene cast's full identity + place identity
+    # so the characters actually in this scene always get their complete voice.
+    ctx = await build_story_context(
+        db, story_id,
+        scene_character_ids=scene_character_ids,
+        scene_location_id=scene_location_id,
+    )
+    user_msg = (
+        "STORY CONTEXT (reference only):\n"
+        f"{fence('story_context', ctx)}\n\n"
+        "RAW DRAFT (the next scene to polish):\n"
+        f"{fence('author_draft', raw)}"
+    )
     if notes.strip():
-        user_msg += f"\n\nREVISION NOTES FROM AUTHOR:\n{notes}"
+        user_msg += "\n\nREVISION NOTES FROM AUTHOR:\n" + fence("revision_notes", notes)
     resp, fb = await llm_service.run(
-        db, user, page="flow.polish", system=POLISH_SYSTEM, user_msg=user_msg,
-        temperature=0.7, max_tokens=None, story_id=story_id,
+        db, user, page="flow.polish", system=POLISH_SYSTEM + "\n\n" + SECURITY_CLAUSE, user_msg=user_msg,
+        temperature=0.7, max_tokens=32000, story_id=story_id,
     )
     return FlowPolishResponse(polished=resp.text.strip(), fallback=fb)
 
 
 async def extract(db: AsyncSession, user: User, story_id: str, polished: str) -> FlowExtractResponse:
-    ctx = await build_story_context(db, story_id)
-    user_msg = f"STORY CONTEXT:\n{ctx}\n\nPOLISHED SCENE:\n{polished}"
+    ctx = await build_story_context(db, story_id, include_entity_ids=True)
+    user_msg = (
+        "STORY CONTEXT (reference only):\n"
+        f"{fence('story_context', ctx)}\n\n"
+        "POLISHED SCENE (analyze ONLY this):\n"
+        f"{fence('polished_scene', polished)}"
+    )
     resp, fb = await llm_service.run(
-        db, user, page="flow.extract", system=EXTRACT_SYSTEM, user_msg=user_msg,
-        json_mode=True, temperature=0.2, max_tokens=None, story_id=story_id,
+        db, user, page="flow.extract", system=EXTRACT_SYSTEM + "\n\n" + SECURITY_CLAUSE, user_msg=user_msg,
+        json_mode=True, temperature=0.2, max_tokens=32000, story_id=story_id,
     )
     parsed = llm_service.parse_json(resp.text) or {}
     if not isinstance(parsed, dict):
         parsed = {}
 
-    # Mark which characters are actually new vs already in cast
+    # Resolve each extracted character to an existing cast member. Name alone is
+    # ambiguous — two cast members can share a name — so we resolve by the [id:…]
+    # the model echoes back (authoritative) and fall back to a name match ONLY
+    # when that name is unique in the cast. Ambiguous names with no id resolve to
+    # "exists but unidentified" (is_new=False, existing_id=None): approve then
+    # neither creates a duplicate nor mutates the wrong record.
     existing_chars = (await db.execute(select(Character).where(Character.story_id == story_id))).scalars().all()
+    by_id = {c.id: c for c in existing_chars}
     by_name = {c.name.lower(): c for c in existing_chars}
+    name_counts: dict[str, int] = {}
+    for c in existing_chars:
+        name_counts[c.name.lower()] = name_counts.get(c.name.lower(), 0) + 1
     cleaned_chars = []
     for c in parsed.get("characters", []):
         if not isinstance(c, dict) or not c.get("name"):
             continue
-        name = c["name"].strip()
-        existing = by_name.get(name.lower())
+        name = c["name"].strip()[:120]  # sanity cap — defang absurd/injected names
+        key = name.lower()
+        # Normalize the echoed id: tolerate "[id:abc]", "id:abc" or bare "abc".
+        cid = (c.get("character_id") or "").strip().strip("[]")
+        if cid.startswith("id:"):
+            cid = cid[3:].strip()
+        match = by_id.get(cid) if cid else None
+        if match is None and name_counts.get(key, 0) == 1:
+            match = by_name.get(key)
+        # Exists if we matched one, OR the name is present in the cast at all
+        # (ambiguous duplicate) — either way it is NOT a new character.
+        exists = match is not None or name_counts.get(key, 0) >= 1
         raw_status = (c.get("status") or "").strip().lower()
         if raw_status not in ("alive", "dead", "unknown", "missing", "transformed"):
             raw_status = ""
@@ -250,8 +313,9 @@ async def extract(db: AsyncSession, user: User, story_id: str, polished: str) ->
             "note": c.get("note", "") or "",
             "status": raw_status,
             "arc_note": (c.get("arc_note") or "").strip(),
-            "is_new": existing is None,
-            "existing_id": existing.id if existing is not None else None,
+            "is_new": not exists,
+            "character_id": match.id if match is not None else "",
+            "existing_id": match.id if match is not None else None,
         })
 
     cleaned_events = []
@@ -346,7 +410,12 @@ async def extract(db: AsyncSession, user: User, story_id: str, polished: str) ->
             "content": scene.get("content", "") or "",
         })
 
-    if not cleaned_scenes and polished.strip():
+    # Only synthesize a single convenience scene when the model genuinely ran but
+    # returned no scene breakdown. If the call DEGRADED to the fallback (fb), the
+    # extract is all-empty, so a manufactured scene would be a pure stub (blank
+    # title/summary, "drafted scene" beat) that gets persisted as a real SceneCard
+    # on approve — exactly the noise we don't want.
+    if not cleaned_scenes and polished.strip() and not fb:
         cleaned_scenes.append({
             "ordinal": 1,
             "title": parsed.get("title_suggestion", "") or "",
@@ -381,19 +450,23 @@ async def extract(db: AsyncSession, user: User, story_id: str, polished: str) ->
         factions=cleaned_factions,
         threads=cleaned_threads,
         scenes=cleaned_scenes,
+        world_rules=[r for r in (parsed.get("world_rules") or []) if isinstance(r, str) and r.strip()],
+        world_lore=(parsed.get("world_lore") or "").strip(),
         fallback=fb,
     )
 
 
-def _resolve_ids_from_names(names: list[str], by_name: dict[str, object]) -> list[str]:
+def _resolve_ids_from_names(names: list[str], name_to_id: dict[str, str]) -> list[str]:
+    """Map character names to ids via a pre-built safe name→id map.
+
+    Ambiguous names that the map deliberately omits (a same-named pair the extract
+    couldn't disambiguate) resolve to nothing — never to the wrong character.
+    """
     ids: list[str] = []
     for name in names:
-        row = by_name.get(name.strip().lower())
-        if row is None:
-            continue
-        row_id = getattr(row, "id", None)
-        if row_id and row_id not in ids:
-            ids.append(row_id)
+        cid = name_to_id.get(name.strip().lower())
+        if cid and cid not in ids:
+            ids.append(cid)
     return ids
 
 
@@ -458,8 +531,17 @@ async def approve(
     # 1. Add ALL new characters automatically (no opt-in — the writer focuses on writing).
     # `include_character_names`, if non-empty, ONLY excludes (an explicit allow-list overrides).
     explicit_allow = {n.strip().lower() for n in payload.include_character_names}
-    existing_chars = (await db.execute(select(Character).where(Character.story_id == story_id))).scalars().all()
+    existing_chars = (await db.execute(
+        select(Character).where(Character.story_id == story_id).order_by(Character.created_at)
+    )).scalars().all()
     existing_by_name = {c.name.lower(): c for c in existing_chars}
+    existing_by_id = {c.id: c for c in existing_chars}
+    # Names that map to >1 cast member can't be resolved by name without risking
+    # the wrong record — destructive updates below require an explicit id for these.
+    ambiguous_names: set[str] = {
+        n for n in {c.name.lower() for c in existing_chars}
+        if sum(1 for c in existing_chars if c.name.lower() == n) > 1
+    }
     new_char_ids: list[str] = []
     name_to_new_id: dict[str, str] = {}
     for c in payload.extracted.characters:
@@ -481,12 +563,17 @@ async def approve(
         existing_by_name[key] = ch
 
     # 1b. Update status / arc for existing characters when the scene changes them.
+    # Resolve by explicit id first (the only safe key for same-named cast members);
+    # fall back to a name match ONLY when that name is unambiguous. For an ambiguous
+    # name with no id we skip the mutation rather than risk corrupting the wrong
+    # character's record.
     for c in payload.extracted.characters:
         if c.is_new:
             continue
-        existing_char = existing_by_name.get(c.name.strip().lower())
-        if existing_char is None and c.existing_id:
-            existing_char = await db.get(Character, c.existing_id)
+        key = c.name.strip().lower()
+        existing_char = existing_by_id.get(c.existing_id) if c.existing_id else None
+        if existing_char is None and key not in ambiguous_names:
+            existing_char = existing_by_name.get(key)
         if existing_char is None:
             continue
         if c.status and existing_char.status != c.status:
@@ -498,6 +585,7 @@ async def approve(
 
     # 2. Weave new themes into the world bible + Themes table
     added_themes: list[str] = []
+    world: World | None = None  # loaded lazily; shared across sections 2, 2b
     if payload.extracted.themes:
         world = await db.get(World, story_id)
         if world is None:
@@ -513,6 +601,24 @@ async def approve(
             if t and t.lower() not in existing_theme_names:
                 db.add(Theme(story_id=story_id, name=t))
                 existing_theme_names.add(t.lower())
+
+    # 2b. Append newly discovered world rules and lore to the world bible.
+    if payload.extracted.world_rules or payload.extracted.world_lore:
+        if world is None:
+            world = await db.get(World, story_id)
+        if world is None:
+            world = World(story_id=story_id)
+            db.add(world)
+        existing_rules = set(world.rules or [])
+        for rule in (payload.extracted.world_rules or []):
+            rule = rule.strip()
+            if rule and rule not in existing_rules:
+                world.rules = (world.rules or []) + [rule]
+                existing_rules.add(rule)
+        if payload.extracted.world_lore:
+            new_lore = payload.extracted.world_lore.strip()
+            if new_lore:
+                world.lore = ((world.lore + "\n\n") if world.lore else "") + new_lore
 
     # 3. Add new locations (deduped against existing by name)
     existing_loc_rows = (await db.execute(select(Location).where(Location.story_id == story_id))).scalars().all()
@@ -584,15 +690,31 @@ async def approve(
                 existing.description = (existing.description + " · " if existing.description else "") + t.description
 
     # 4. Determine character_ids for the chapter (existing referenced + opted-in new)
+    # Build a SAFE name→id map used for every downstream by-name resolution (chapter
+    # links, POV, events, relationships, scene members, revelation knowers):
+    #   • unambiguous existing names → their id
+    #   • newly-created characters    → their new id
+    #   • an ambiguous name is included ONLY if the extract disambiguated it with an
+    #     explicit existing_id; otherwise it's left out so a same-named pair can
+    #     never resolve to the wrong character (it resolves to nothing instead).
     referenced_ids: list[str] = []
-    name_to_any_id: dict[str, str] = {**{n: c.id for n, c in existing_by_name.items()}, **name_to_new_id}
+    name_to_any_id: dict[str, str] = {
+        n: c.id for n, c in existing_by_name.items() if n not in ambiguous_names
+    }
+    name_to_any_id.update(name_to_new_id)
     for c in payload.extracted.characters:
-        if c.existing_id:
-            referenced_ids.append(c.existing_id)
-        else:
+        key = c.name.strip().lower()
+        if c.existing_id and c.existing_id in existing_by_id:
+            name_to_any_id[key] = c.existing_id  # extract-disambiguated id wins
+    for c in payload.extracted.characters:
+        # Trust existing_id only if it's a real character of THIS story (the client
+        # supplies the payload — never let it inject a foreign/bogus id into the
+        # chapter's denormalized character_ids). Otherwise resolve by name.
+        cid = c.existing_id if (c.existing_id and c.existing_id in existing_by_id) else None
+        if cid is None:
             cid = name_to_any_id.get(c.name.strip().lower())
-            if cid and cid not in referenced_ids:
-                referenced_ids.append(cid)
+        if cid and cid not in referenced_ids:
+            referenced_ids.append(cid)
 
     # 5. Resolve POV
     pov_id: str | None = None
@@ -714,7 +836,7 @@ async def approve(
                 existing_loc_by_name[loc_key] = loc_row
             loc_id = loc_row.id
 
-        scene_char_ids = _resolve_ids_from_names(sc.characters, existing_by_name)
+        scene_char_ids = _resolve_ids_from_names(sc.characters, name_to_any_id)
         if not scene_char_ids:
             scene_char_ids = list(referenced_ids)
 
@@ -781,7 +903,7 @@ async def approve(
         for rev in sc.revelations:
             if not rev.description:
                 continue
-            knowers = [cid for cid in _resolve_ids_from_names(rev.characters_who_know, existing_by_name) if cid]
+            knowers = [cid for cid in _resolve_ids_from_names(rev.characters_who_know, name_to_any_id) if cid]
             row = Revelation(
                 story_id=story_id,
                 scene_id=scene.id,
@@ -822,11 +944,23 @@ async def approve(
     await db.commit()
     await db.refresh(chapter)
 
-    # Background graph reprojection (best-effort, no await on failure)
+    # Graph reprojection (best-effort). This runs AFTER the chapter commit, so
+    # reproject_story's graph_status / graph_synced_at writes need their own
+    # commit to persist — otherwise the status update is rolled back at session
+    # teardown and the story looks perpetually unsynced (the reconciler would
+    # then keep retrying an already-good graph). On failure graph_status is left
+    # != "ok" so graph_service.reconcile_stale_graphs picks it up later.
+    # reproject_story catches its own Neo4j errors (returns projected=False and
+    # sets graph_status != "ok") rather than raising, so this commit persists
+    # whichever status it landed on. We deliberately do NOT rollback in the
+    # except path: with expire_on_commit=False the already-committed `chapter`
+    # stays readable, and a rollback would force-expire it (breaking the caller's
+    # chapter.id read). Any uncommitted status change is discarded at teardown.
     try:
         from app.services import graph_service
 
         await graph_service.reproject_story(db, story_id)
+        await db.commit()
     except Exception as e:
         log.warning("graph reprojection failed: %s", e)
 

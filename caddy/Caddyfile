@@ -1,0 +1,30 @@
+# Domain is injected at runtime via the DOMAIN environment variable.
+# Set it in .env.production: DOMAIN=yourapp.com
+# Caddy handles Let's Encrypt TLS automatically.
+
+{$DOMAIN} {
+    # API routes
+    reverse_proxy /v1/*          api:8080
+    reverse_proxy /health        api:8080
+
+    # /docs, /openapi.json are disabled in production (ENVIRONMENT=production)
+    # via main.py — do not proxy them here so Caddy returns 404 at the edge.
+
+    # Frontend (everything else)
+    reverse_proxy web:3000
+
+    encode gzip
+
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        -Server
+
+        # Content-Security-Policy for the Next.js frontend.
+        # Adjust 'script-src' when adding third-party analytics/widgets.
+        Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: https:; connect-src 'self' {$DOMAIN}; frame-ancestors 'none'; base-uri 'self'"
+
+        # Prevent browsers caching API error pages (which contain no real data)
+        # alongside real pages.
+        Cache-Control "no-store"
+    }
+}

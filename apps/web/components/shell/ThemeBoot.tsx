@@ -1,16 +1,24 @@
-// Inline script that runs before React hydration to set the .dark class on
-// <html> based on localStorage. Without this the page would briefly paint in
-// the default theme and then flash to the user's preference once JS loaded.
+// Inline script — runs before React to set data-mode/data-dir on <html>.
+// Prevents flash: page paints with correct palette before JS hydrates.
 export function ThemeBoot() {
   const code = `
-(function(){try{
-  var k='gink-theme';
-  var v=localStorage.getItem(k);
-  var prefersDark=window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches;
-  var dark = v ? v==='dark' : (prefersDark || v===null);
-  if (dark) document.documentElement.classList.add('dark');
-  else document.documentElement.classList.remove('dark');
-}catch(e){document.documentElement.classList.add('dark');}})();
+(function(){
+  try {
+    var stored = localStorage.getItem('inkwell-theme');
+    // Legacy key fallback
+    if (!stored) stored = localStorage.getItem('gink-theme') === 'dark' ? 'dark' : null;
+    var mode = (stored === 'dark' || stored === 'soft' || stored === 'light') ? stored : 'dark';
+    var dir = localStorage.getItem('inkwell-dir') || 'ember';
+    var html = document.documentElement;
+    html.setAttribute('data-mode', mode);
+    html.setAttribute('data-dir', dir);
+    if (mode === 'dark') html.classList.add('dark');
+    else html.classList.remove('dark');
+  } catch(e) {
+    document.documentElement.setAttribute('data-mode', 'soft');
+    document.documentElement.setAttribute('data-dir', 'ember');
+  }
+})();
 `;
   return <script dangerouslySetInnerHTML={{ __html: code }} />;
 }

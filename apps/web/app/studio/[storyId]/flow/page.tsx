@@ -2,16 +2,19 @@
 import { useParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Sparkles, Check, MessageSquarePlus, X, BookOpen, Languages } from "lucide-react";
+import { Sparkles, Check, MessageSquarePlus, X, BookOpen, Languages, Drama } from "lucide-react";
 import * as api from "@/lib/api";
-import { Btn, Card, FG, Inp, PageHdr, Ta, Tag } from "@/components/ui/Primitives";
+import { Btn, Card, FG, Inp, PageHdr, Sel, Ta, Tag } from "@/components/ui/Primitives";
 import { useDebouncedSave } from "@/lib/debounce";
+import { AiLockNotice } from "@/components/billing/AiLockNotice";
+import { useEntitlement } from "@/lib/useEntitlement";
 
 type Phase = "writing" | "polishing" | "reviewing" | "extracting" | "enhancing" | "done";
 
 export default function FlowPage() {
   const { storyId } = useParams<{ storyId: string }>();
   const qc = useQueryClient();
+  const { aiAvailable } = useEntitlement();
 
   const [raw, setRaw] = useState("");
   const [polished, setPolished] = useState("");
@@ -23,9 +26,16 @@ export default function FlowPage() {
   const [enhancerOn, setEnhancerOn] = useState(false);
   const [enhancement, setEnhancement] = useState<{ language: string; enhanced: string; notes: string } | null>(null);
 
+  // Scene setup (optional): who/where this scene is. Pins their full identity in
+  // the AI context so in-scene characters always sound exactly like themselves.
+  const [sceneCharIds, setSceneCharIds] = useState<string[]>([]);
+  const [sceneLocId, setSceneLocId] = useState<string>("");
+  const [sceneSetupOpen, setSceneSetupOpen] = useState(false);
+
   const { data: draft } = useQuery({ queryKey: ["flow-draft", storyId], queryFn: () => api.flowGetDraft(storyId) });
   const { data: existingChapters } = useQuery({ queryKey: ["chapters", storyId], queryFn: () => api.listChapters(storyId) });
   const { data: existingCharacters } = useQuery({ queryKey: ["characters", storyId], queryFn: () => api.listCharacters(storyId) });
+  const { data: existingLocations } = useQuery({ queryKey: ["locations", storyId], queryFn: () => api.listLocations(storyId) });
 
   // Use max(chapter.number) + 1 so the hint matches what the backend will
   // actually assign on approve — even after deletes leave gaps.
@@ -77,7 +87,11 @@ export default function FlowPage() {
       setRaw(draft.raw || "");
       setPolished(draft.polished || "");
       setNotes(draft.notes || "");
-      if (draft.extracted && Object.keys(draft.extracted).length > 0) setExtracted(draft.extracted);
+      // Only restore extracted if it has real content — an empty FlowExtractResponse
+      // (all keys present, all arrays empty) is truthy in JS and would show the
+      // approve section with nothing in it, letting the user commit empty entities.
+      const ext = draft.extracted;
+      if (ext && (ext.title_suggestion || (ext.characters?.length ?? 0) > 0)) setExtracted(ext);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draft]);
@@ -90,7 +104,7 @@ export default function FlowPage() {
 
   const polish = useMutation({
     mutationKey: ["llm", "flow.polish"],
-    mutationFn: () => api.flowPolish(storyId, raw, notes),
+    mutationFn: () => api.flowPolish(storyId, raw, notes, { scene_character_ids: sceneCharIds, scene_location_id: sceneLocId || null }),
     onMutate: () => setPhase("polishing"),
     onSuccess: (r) => {
       if (!r.polished || !r.polished.trim()) {
@@ -238,6 +252,8 @@ export default function FlowPage() {
         }
       />
 
+      <AiLockNotice />
+
       {(phase === "writing" || phase === "polishing") && (
         <>
           {numberGaps.length > 0 && !targetTouched && (
@@ -269,11 +285,57 @@ export default function FlowPage() {
                     : "Pick up where you left off…"}
                   className="text-base leading-relaxed" />
             </FG>
+
+            {/* Scene setup (optional) — pins the in-scene cast's full voice/identity. */}
+            <div className="mt-3 border-t border-ink-border pt-3">
+              <button
+                type="button"
+                onClick={() => setSceneSetupOpen(o => !o)}
+                className="flex items-center gap-2 text-xs uppercase tracking-wider text-ink-text2 hover:text-ink-text"
+                title="Tell the AI who and where this scene is. Their full voice profile, masks and current state get pinned so they sound exactly like themselves."
+              >
+                <Drama size={12} className={sceneCharIds.length || sceneLocId ? "text-ink-gold" : "text-ink-text3"} />
+                Scene setup (optional)
+                {(sceneCharIds.length > 0 || sceneLocId) && (
+                  <Tag color="gold">{sceneCharIds.length + (sceneLocId ? 1 : 0)} pinned</Tag>
+                )}
+                <span className="text-ink-text3">{sceneSetupOpen ? "▾" : "▸"}</span>
+              </button>
+              {sceneSetupOpen && (
+                <div className="mt-2 grid gap-3 md:grid-cols-[1fr_220px]">
+                  <FG label="Who's in this scene" hint="Their full voice, masks & current state get pinned in context.">
+                    <div className="flex flex-wrap gap-1.5">
+                      {(existingCharacters || []).map((c: any) => {
+                        const on = sceneCharIds.includes(c.id);
+                        return (
+                          <button
+                            key={c.id}
+                            type="button"
+                            onClick={() => setSceneCharIds(ids => on ? ids.filter(x => x !== c.id) : [...ids, c.id])}
+                            className={`px-2.5 py-1 rounded text-xs border ${on ? "border-ink-gold/40 bg-ink-gold/10 text-ink-goldLight" : "border-ink-border text-ink-text2 hover:text-ink-text"}`}
+                          >
+                            {c.name}
+                          </button>
+                        );
+                      })}
+                      {(existingCharacters || []).length === 0 && <span className="text-xs text-ink-text3">No characters yet.</span>}
+                    </div>
+                  </FG>
+                  <FG label="Where" hint="Pins the place identity.">
+                    <Sel value={sceneLocId} onChange={e => setSceneLocId(e.target.value)}>
+                      <option value="">— optional —</option>
+                      {(existingLocations || []).map((l: any) => <option key={l.id} value={l.id}>{l.name}</option>)}
+                    </Sel>
+                  </FG>
+                </div>
+              )}
+            </div>
+
             <div className="flex justify-between items-center gap-2 mt-3 flex-wrap">
               <div className="flex items-center gap-3">
                 <Btn
                   variant="ghost"
-                  disabled={!raw.trim() || polish.isPending || skipPolish.isPending || enhance.isPending}
+                  disabled={!raw.trim() || polish.isPending || skipPolish.isPending || enhance.isPending || !aiAvailable}
                   onClick={handleUseAsIs}
                   title="Keep your words as-is. The AI files characters, places, threads, scene cards, and revelations. If the language enhancer is on, it checks the language first."
                 >
@@ -355,10 +417,10 @@ export default function FlowPage() {
               <Inp value={notes} onChange={e => setNotes(e.target.value)} placeholder="e.g. make her angrier; the brother is older" />
             </FG>
             <div className="flex gap-2 justify-end mt-2">
-              <Btn onClick={() => polish.mutate()} disabled={polish.isPending}>
+              <Btn onClick={() => polish.mutate()} disabled={polish.isPending || !aiAvailable}>
                 <MessageSquarePlus size={14}/> {polish.isPending ? "Revising…" : "Add notes & revise"}
               </Btn>
-              <Btn variant="primary" disabled={!polished.trim() || extract.isPending} onClick={() => extract.mutate()}>
+              <Btn variant="primary" disabled={!polished.trim() || extract.isPending || !aiAvailable} onClick={() => extract.mutate()}>
                 <Sparkles size={14}/> {extract.isPending ? "Reading the scene…" : "Approve — what's in it?"}
               </Btn>
             </div>
@@ -478,6 +540,20 @@ export default function FlowPage() {
                 </ul>
               </div>
             )}
+            {(extracted.world_rules || []).length > 0 && (
+              <div className="mb-3">
+                <h3 className="label">World rules (added to world bible)</h3>
+                <ul className="space-y-1 text-sm">
+                  {extracted.world_rules.map((r: string, i: number) => <li key={i}>• {r}</li>)}
+                </ul>
+              </div>
+            )}
+            {extracted.world_lore && (
+              <div className="mb-3">
+                <h3 className="label">World lore (added to world bible)</h3>
+                <p className="text-sm text-ink-text2">{extracted.world_lore}</p>
+              </div>
+            )}
             {(extracted.scenes || []).length > 0 && (
               <div className="mb-3">
                 <h3 className="label">Scene cards</h3>
@@ -522,7 +598,7 @@ export default function FlowPage() {
 
             <div className="flex gap-2 justify-end mt-4">
               <Btn variant="ghost" onClick={reset}>Discard</Btn>
-              <Btn variant="primary" disabled={approve.isPending} onClick={() => approve.mutate()}>
+              <Btn variant="primary" disabled={approve.isPending || (!extracted?.title_suggestion && !(extracted?.characters?.length))} onClick={() => approve.mutate()}>
                 <Check size={14}/> {approve.isPending
                   ? "Filing…"
                   : target === "new"

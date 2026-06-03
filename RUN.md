@@ -19,7 +19,7 @@
 2. Auto-generates `apps/api/.env` with fresh `JWT_SECRET` + `LLM_KEY_ENCRYPTION_KEY` on first run
 3. Appends missing `QDRANT_URL` / `NEO4J_URI` lines to an existing `.env` (idempotent)
 4. Starts **Qdrant** (`gink-qdrant` on :6333) and **Neo4j** (`gink-neo4j` on :7687/:7474) via Docker — skips if already running, skips silently if Docker is unavailable
-5. Applies DB migrations (`alembic upgrade head`) — idempotent
+5. Applies DB migrations (`alembic upgrade head`) — idempotent, currently at **head 0013**
 6. Starts the **backend** on **:8080** and **frontend** on **:3000** with `[api]`/`[web]`-tagged logs
 7. **Ctrl+C** stops backend, frontend, and the Docker containers
 
@@ -79,16 +79,51 @@ cd apps/web && npm install --legacy-peer-deps && npm run dev
 
 Run without any external services. Neo4j/Qdrant unset → Story Map derives from SQLite, RAG returns empty (graceful); no LLM → deterministic fallback (all responses succeed, AI features return placeholder text). This is what `run.sh` does on a machine without Docker.
 
+## Auth setup (Clerk)
+
+The app uses **Clerk** for authentication. Two modes:
+
+**Dev / local (legacy password auth):**
+Set `LEGACY_PASSWORD_AUTH=1` in `apps/api/.env` — disables Clerk requirement, uses built-in `/v1/auth/signup` + `/v1/auth/login`. This is the default for the test suite and local dev without a Clerk account.
+
+**Clerk (staging / prod):**
+1. Create a Clerk application at [clerk.com](https://clerk.com)
+2. Set in `apps/api/.env`:
+   ```
+   CLERK_JWKS_URL=https://<your-instance>.clerk.accounts.dev/.well-known/jwks.json
+   CLERK_ISSUER=https://<your-instance>.clerk.accounts.dev
+   ```
+3. Create a Clerk webhook → copy `whsec_…` into `CLERK_WEBHOOK_SECRET`
+4. Set in `apps/web/.env.local`:
+   ```
+   NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_...
+   ```
+
+Never commit real Clerk keys. Keep them in gitignored `.env` files or the `../_private/` folder.
+
+## Background worker (optional)
+
+The ARQ worker handles async export jobs (PDF/EPUB) and the graph reconciliation cron (repairs Neo4j drift every 5 min):
+
+```bash
+cd apps/api
+REDIS_URL=redis://localhost:6379 .venv/bin/arq app.workers.export_worker.WorkerSettings
+```
+
+Without it: export falls back to synchronous generation, graph self-heal doesn't run (it's best-effort anyway — the approve flow already fixes the common case).
+
 ## Running the tests
 
 ```bash
 cd apps/api
-.venv/bin/pytest -q                              # whole suite (10 tests)
-.venv/bin/pytest tests/test_llm_routing.py -v    # provider-routing tests
+.venv/bin/pytest -q                              # full suite (~73 tests)
 .venv/bin/pytest tests/test_smoke.py -v          # full flow smoke tests
+.venv/bin/pytest tests/test_audit_fixes.py -v    # context budget + pagination + idempotency
+.venv/bin/pytest tests/test_audit_fixes_p2.py -v # prompt safety + character disambiguation + RAG
+.venv/bin/pytest tests/test_voice_studio.py -v   # Character Voice Studio (identity, observer, scene focus)
 ```
 
-Smoke tests run against an unreachable LM Studio URL, forcing the fallback provider — they exercise every degraded path without any external services.
+Tests run against an unreachable LM Studio URL, forcing the fallback provider — they exercise every degraded path without any external services. Neo4j and Qdrant are intentionally left unset.
 
 ## Manual smoke (UI)
 
@@ -96,14 +131,21 @@ Smoke tests run against an unreachable LM Studio URL, forcing the fallback provi
 2. **Settings** → confirm **Use the same model for everything**, provider **LM Studio**. Click **Test**.
 3. Open the story → **Flow Writing**.
    - Write a raw scene, then **Shape this into a scene →** (AI polish) or **Use my writing as-is →**.
+   - Optional: open **Scene setup** under the draft and pick who/where the scene is — their full voice profile gets pinned for the polish.
    - Review the extracted entities — characters, relationships, locations, factions, themes, threads, scenes, revelations.
    - **Approve & save**. Everything is filed automatically.
 4. **Chapters** — your chapter is there; try the **Writing Companion**.
-5. **Characters** — check that character status + arc updates from the scene carried through.
-6. **Timeline** — scenes sorted by `time_sort_key` (chronological) or reading order.
-7. **Threads** — Plot Threads list + Weave grid (which threads touch which scenes).
-8. **Continuity Radar** — click **Reindex story vectors**, then query anything (e.g. a character name) to see the Graph-RAG context the AI would receive.
-9. **Story Map**, **Story Check**, **Export** (MD/DOCX/JSON).
+5. **Characters** — check that character status + arc updates from the scene carried through (the deep identity now lives in the Voice Studio; this tab is the roster).
+6. **Voice** (the third view toggle, top-left) → **Character Voice Studio**:
+   - **Identity** — build a character via the **Guided interview** or **Analyze existing writing** (approve the proposed traits); edit the 5 layers + relationship masks + current state.
+   - **Place** — pick a location, build its identity (atmosphere, senses, motif).
+   - **Observer** — paste a draft, **Critique** it, then Apply / Mark-intentional on the line notes; or **Rewrite** in character.
+   - **Evolve** — paste an approved scene; choose temporary / recurring / permanent for each suggested update.
+   - **Compare** — pick 2+ characters + a situation; confirm their responses feel distinct.
+7. **Timeline** — scenes sorted by `time_sort_key` (chronological) or reading order.
+8. **Threads** — Plot Threads list + Weave grid (which threads touch which scenes).
+9. **Continuity Radar** — click **Reindex story vectors**, then query anything (e.g. a character name) to see the Graph-RAG context the AI would receive.
+10. **Story Map**, **Story Check**, **Export** (MD/DOCX/JSON).
 
 ## Provider switching & routing
 
@@ -119,4 +161,4 @@ Settings → fill the provider slot(s), **Test** each, **Save settings**.
 
 Providers: **LM Studio** (default, local :1234), **OpenAI**, **Anthropic**, **OpenRouter**, **Google Gemini**. Anthropic/OpenRouter have no embeddings API → Embedding lane falls back to local LM Studio. Keys encrypted at rest via Fernet (`LLM_KEY_ENCRYPTION_KEY`).
 
-To audit routing, run a polish and an extract, then check the `llm_runs` table — each row shows the `provider`, `model`, and `page` that handled it.
+To audit routing: run a polish and an extract, then check the `llm_runs` table — each row shows the `provider`, `model`, and `page` that handled it.

@@ -1,38 +1,53 @@
 "use client";
 import { useEffect, useState } from "react";
-import { Sun, Moon } from "lucide-react";
-import { applyTheme, getStoredTheme, setStoredTheme, type Theme } from "@/lib/theme";
+import { Sun, Moon, Sunset } from "lucide-react";
+import { applyMode, getStoredMode, setStoredMode, nextMode, type Mode, type Direction } from "@/lib/theme";
 import { cn } from "@/lib/cn";
 
+const ICONS: Record<Mode, React.ReactNode> = {
+  soft:  <Sunset  size={12} />,
+  dark:  <Moon    size={12} />,
+  light: <Sun     size={12} />,
+};
+
+const LABELS: Record<Mode, string> = {
+  soft:  "Soft",
+  dark:  "Dark",
+  light: "Light",
+};
+
 export function ThemeToggle({ className }: { className?: string }) {
-  const [theme, setTheme] = useState<Theme>("dark");
+  const [mode, setMode] = useState<Mode>("soft");
 
   useEffect(() => {
-    const stored = getStoredTheme();
-    if (stored) setTheme(stored);
-    else if (typeof document !== "undefined" && document.documentElement.classList.contains("dark")) setTheme("dark");
-    else setTheme("light");
+    const stored = getStoredMode();
+    const html = document.documentElement;
+    const attr = html.getAttribute("data-mode") as Mode | null;
+    setMode(stored ?? attr ?? "soft");
   }, []);
 
-  function toggle() {
-    const next: Theme = theme === "dark" ? "light" : "dark";
-    setTheme(next);
-    setStoredTheme(next);
-    applyTheme(next);
+  function cycle() {
+    const next = nextMode(mode);
+    setMode(next);
+    setStoredMode(next);
+    // Preserve the active color direction instead of resetting it to "ember".
+    const dir = (document.documentElement.getAttribute("data-dir") as Direction | null) ?? "ember";
+    applyMode(next, dir);
   }
 
   return (
     <button
-      onClick={toggle}
+      onClick={cycle}
       className={cn(
-        "inline-flex items-center gap-1.5 px-2 py-1.5 rounded text-xs text-ink-text2 hover:text-ink-goldLight transition-colors",
+        "inline-flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-xs transition-colors",
+        "text-iw-muted hover:text-iw-text border border-transparent hover:border-iw-border",
         className,
       )}
-      title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+      title={`Switch to ${nextMode(mode)} mode`}
       aria-label="Toggle theme"
     >
-      {theme === "dark" ? <Sun size={12}/> : <Moon size={12}/>}
-      {theme === "dark" ? "Light mode" : "Dark mode"}
+      {ICONS[mode]}
+      <span className="hidden sm:inline font-mono tracking-wider uppercase text-[10px]">{LABELS[mode]}</span>
     </button>
   );
 }

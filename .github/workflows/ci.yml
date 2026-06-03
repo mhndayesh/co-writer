@@ -1,0 +1,191 @@
+name: CI / CD
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ghcr.io/${{ github.repository }}
+
+jobs:
+  # ── Backend ─────────────────────────────────────────────────────────────────
+  api:
+    name: API — lint / test / migrate
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: gink
+          POSTGRES_PASSWORD: gink_test
+          POSTGRES_DB: gink_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: cd apps/api && pip install -e ".[dev]"
+
+      - name: Lint (ruff)
+        run: cd apps/api && ruff check app/
+
+      - name: Type check (mypy)
+        run: cd apps/api && mypy app/ --ignore-missing-imports
+        continue-on-error: true
+
+      - name: Migration smoke test (PostgreSQL)
+        run: |
+          cd apps/api
+          alembic upgrade head
+        env:
+          DATABASE_URL: postgresql+asyncpg://gink:gink_test@localhost:5432/gink_test
+          JWT_SECRET: ci_only_not_real_secret_for_testing_only
+          LLM_KEY_ENCRYPTION_KEY: ""
+          ENVIRONMENT: development
+
+      - name: Run tests (SQLite in-memory)
+        run: cd apps/api && pytest -v
+        env:
+          DATABASE_URL: sqlite+aiosqlite:///./test.db
+          JWT_SECRET: ci_only_not_real_secret_for_testing_only
+          LLM_KEY_ENCRYPTION_KEY: ""
+          ENVIRONMENT: development
+
+  # ── Frontend ─────────────────────────────────────────────────────────────────
+  web:
+    name: Web — lint / type-check / build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Install dependencies
+        run: cd apps/web && npm ci --legacy-peer-deps
+
+      - name: Lint
+        run: cd apps/web && npm run lint
+
+      - name: Type check
+        run: cd apps/web && npx tsc --noEmit
+
+      - name: Build
+        run: cd apps/web && npm run build
+        env:
+          NEXT_PUBLIC_API_BASE_URL: http://localhost:8080
+          NEXT_TELEMETRY_DISABLED: "1"
+
+  # ── Build & push images ──────────────────────────────────────────────────────
+  build-push:
+    name: Build & push Docker images
+    needs: [api, web]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push API image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./apps/api
+          push: true
+          tags: |
+            ${{ env.IMAGE_PREFIX }}/api:${{ github.sha }}
+            ${{ env.IMAGE_PREFIX }}/api:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push Web image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./apps/web
+          push: true
+          tags: |
+            ${{ env.IMAGE_PREFIX }}/web:${{ github.sha }}
+            ${{ env.IMAGE_PREFIX }}/web:latest
+          build-args: |
+            NEXT_PUBLIC_API_BASE_URL=${{ vars.NEXT_PUBLIC_API_BASE_URL }}
+            NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=${{ vars.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Scan API image for CVEs
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE_PREFIX }}/api:${{ github.sha }}
+          format: table
+          exit-code: 1
+          severity: CRITICAL,HIGH
+
+      - name: Scan Web image for CVEs
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE_PREFIX }}/web:${{ github.sha }}
+          format: table
+          exit-code: 1
+          severity: CRITICAL,HIGH
+
+  # ── Deploy ──────────────────────────────────────────────────────────────────
+  deploy:
+    name: Deploy to production
+    needs: build-push
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+
+    environment: production
+
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: deploy
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script: |
+            cd /opt/gink
+            export IMAGE_TAG=${{ github.sha }}
+            export GITHUB_REPO=${{ github.repository }}
+            docker compose -f docker-compose.prod.yml pull
+            # Expand-then-contract: migrate on the NEW image BEFORE swapping the app
+            # containers, so the live app is never pointed at an unmigrated schema and
+            # a failed migration aborts the deploy with the old version still serving.
+            docker compose -f docker-compose.prod.yml up -d postgres redis neo4j qdrant
+            docker compose -f docker-compose.prod.yml run --rm api alembic upgrade head
+            docker compose -f docker-compose.prod.yml up -d --no-build
+            echo "Deployed $IMAGE_TAG successfully"

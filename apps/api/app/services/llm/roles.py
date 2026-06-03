@@ -20,6 +20,14 @@ PAGE_CATEGORY: dict[str, str] = {
     "flow.extract": "technical",    # structured extraction → JSON
     "flow.enhance": "technical",    # language enhancement → JSON suggestions
     "llm.test": "technical",        # connection diagnostic
+    # Character Voice Studio (Narrative Fidelity Engine)
+    "voice.analyze": "technical",   # extract identity traits → JSON proposals
+    "voice.interview": "creative",  # synthesize readable + structured profile
+    "voice.place": "creative",      # synthesize place identity from answers
+    "voice.observe": "creative",    # line-level critique (judgement, like story_check)
+    "voice.rewrite": "creative",    # Dialogue Writer rewrite/draft (prose)
+    "voice.evolve": "technical",    # post-scene delta proposals → JSON
+    "voice.compare": "creative",    # side-by-side voice comparison (prose)
 }
 
 CREATIVE = "creative"

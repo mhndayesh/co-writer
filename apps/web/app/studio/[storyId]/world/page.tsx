@@ -5,12 +5,22 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Plus, X } from "lucide-react";
 import * as api from "@/lib/api";
 import { Btn, Card, FG, Inp, PageHdr, Ta, Tag } from "@/components/ui/Primitives";
+import { CoverUploader } from "@/components/ui/CoverUploader";
 import { useDebouncedSave } from "@/lib/debounce";
 
 export default function WorldPage() {
   const { storyId } = useParams<{ storyId: string }>();
   const qc = useQueryClient();
   const { data: world } = useQuery({ queryKey: ["world", storyId], queryFn: () => api.getWorld(storyId) });
+  const { data: story } = useQuery({ queryKey: ["story", storyId], queryFn: () => api.getStory(storyId) });
+
+  const setCover = useMutation({
+    mutationFn: (url: string | null) => api.updateStory(storyId, { cover_image_url: url }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["story", storyId] });
+      qc.invalidateQueries({ queryKey: ["stories"] });
+    },
+  });
 
   const [draft, setDraft] = useState<any>(null);
   useEffect(() => { if (world && !draft) setDraft({ ...world }); }, [world, draft]);
@@ -39,6 +49,12 @@ export default function WorldPage() {
   return (
     <div className="max-w-4xl">
       <PageHdr title="✦ Your World" subtitle="The story bible. The AI respects everything here on every generation." />
+
+      <Card className="mb-4">
+        <h3 className="font-display text-lg mb-1">Project cover</h3>
+        <p className="text-sm text-ink-text2 mb-3">Shown on your stories hub and used as the default when you publish.</p>
+        <CoverUploader value={story?.cover_image_url} onChange={(url) => setCover.mutate(url)} label="" />
+      </Card>
 
       <Card className="mb-4">
         <div className="grid gap-3 md:grid-cols-2">

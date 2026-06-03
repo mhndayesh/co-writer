@@ -1,4 +1,4 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 from sqlalchemy import delete as sa_delete, select
 
 from app.core.deps import CurrentUser, DB, get_user_story
@@ -24,9 +24,18 @@ async def _sync_thread_links(db: DB, story_id: str, scene: SceneCard) -> None:
 
 
 @router.get("/{story_id}/scenes")
-async def list_scenes(story_id: str, user: CurrentUser, db: DB):
+async def list_scenes(
+    story_id: str,
+    user: CurrentUser,
+    db: DB,
+    limit: int | None = Query(None, ge=1, le=500, description="Opt-in page size; omit to return all."),
+    offset: int = Query(0, ge=0),
+):
     await get_user_story(story_id, user, db)
-    rows = (await db.execute(select(SceneCard).where(SceneCard.story_id == story_id).order_by(SceneCard.chapter_id, SceneCard.ordinal))).scalars().all()
+    stmt = select(SceneCard).where(SceneCard.story_id == story_id).order_by(SceneCard.chapter_id, SceneCard.ordinal)
+    if limit is not None:
+        stmt = stmt.offset(offset).limit(limit)
+    rows = (await db.execute(stmt)).scalars().all()
     return envelope_ok({"scenes": [SceneCardOut.model_validate(r).model_dump() for r in rows]})
 
 

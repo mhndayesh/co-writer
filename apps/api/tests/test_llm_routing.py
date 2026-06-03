@@ -1,9 +1,16 @@
 """Provider routing tests for the 3-lane LLM router.
 
 No network calls here: the tests assert the resolved provider name only.
+
+Lane routing only applies to BYOK users (they run on their own keys); free/Dev-AI
+users always route to the house ("dev AI") provider regardless of their lanes —
+that distinction is covered in test_subscriptions.py. So the users here are made
+BYOK with placeholder keys so their lane config is honored.
 """
 import pytest
 
+from app.core import plans
+from app.core.security import encrypt_secret
 from app.db.models import User, UserLLMSettings
 from app.db.session import SessionLocal
 from app.services.llm.factory import get_embedding_provider, get_provider_for_page
@@ -15,12 +22,17 @@ def _lane(provider: str) -> dict:
         "base_url": "",
         "model": "",
         "embed_model": "",
-        "api_key_ciphertext": "",
+        # Encrypted placeholder so a BYOK build sees a real key (round-trips
+        # through decrypt_secret whether or not a Fernet key is configured).
+        "api_key_ciphertext": encrypt_secret("test-key"),
     }
 
 
-async def _mk_user(db, email: str) -> User:
-    u = User(email=email, password_hash="x", display_name="t")
+async def _mk_user(db, email: str, tier: str = plans.BYOK) -> User:
+    u = User(
+        email=email, password_hash="x", display_name="t",
+        plan_tier=tier, plan_status=plans.STATUS_ACTIVE,
+    )
     db.add(u)
     await db.flush()
     return u

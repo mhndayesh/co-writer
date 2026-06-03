@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus, Trash2, X } from "lucide-react";
 import * as api from "@/lib/api";
-import { Btn, Card, FG, Inp, PageHdr, Sel, Ta, Tag } from "@/components/ui/Primitives";
+import { Btn, Card, FG, Inp, PageHdr, QueryError, Sel, Ta, Tag } from "@/components/ui/Primitives";
 import { useDebouncedSave } from "@/lib/debounce";
 
 const SENSES = ["sight", "sound", "smell", "taste", "touch"];
@@ -16,7 +16,7 @@ function toggleId(list: string[] = [], id: string) {
 export default function ScenesPage() {
   const { storyId } = useParams<{ storyId: string }>();
   const qc = useQueryClient();
-  const { data: scenes } = useQuery({ queryKey: ["scenes", storyId], queryFn: () => api.listScenes(storyId) });
+  const { data: scenes, isError: scenesError, error: scenesErr, refetch: refetchScenes } = useQuery({ queryKey: ["scenes", storyId], queryFn: () => api.listScenes(storyId) });
   const { data: chapters } = useQuery({ queryKey: ["chapters", storyId], queryFn: () => api.listChapters(storyId) });
   const { data: characters } = useQuery({ queryKey: ["characters", storyId], queryFn: () => api.listCharacters(storyId) });
   const { data: locations } = useQuery({ queryKey: ["locations", storyId], queryFn: () => api.listLocations(storyId) });
@@ -78,10 +78,11 @@ export default function ScenesPage() {
   const sceneRevelations = (revelations || []).filter((r: any) => r.scene_id === activeId);
 
   return (
-    <div className="grid grid-cols-[280px_1fr] gap-6 max-w-7xl">
+    <div className="grid grid-cols-1 lg:grid-cols-[280px_1fr] gap-4 lg:gap-6 max-w-7xl">
       <aside>
         <PageHdr title="Scene Cards" />
         <Btn variant="primary" className="w-full mb-3" onClick={() => create.mutate()}><Plus size={14}/> New scene</Btn>
+        {scenesError && <div className="mb-3"><QueryError error={scenesErr} retry={refetchScenes} what="scene cards" /></div>}
         <ul className="space-y-1">
           {(scenes || []).map((s: any) => (
             <li key={s.id}>

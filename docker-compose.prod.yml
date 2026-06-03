@@ -1,0 +1,200 @@
+version: "3.9"
+
+# Production Docker Compose.
+# All services run on an internal network; only Caddy exposes public ports.
+# Copy .env.production.example → .env.production and fill in all secrets.
+
+services:
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 256m
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      # The Caddyfile resolves {$DOMAIN} from the caddy container's own env at
+      # runtime; without this it binds to an empty site name and never serves TLS.
+      DOMAIN: ${DOMAIN}
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      # Wait for api + web to be HEALTHY (not merely started), or Caddy proxies to
+      # a not-yet-listening upstream and serves 502s for the first seconds of every
+      # deploy.
+      api:
+        condition: service_healthy
+      web:
+        condition: service_healthy
+    networks:
+      - internal
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 1g
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-gink}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-gink}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-gink}"]
+      interval: 5s
+      retries: 10
+    networks:
+      - internal
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 256m
+    command: redis-server --save 60 1 --loglevel warning
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - internal
+
+  neo4j:
+    image: neo4j:5-community
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 1g
+    environment:
+      NEO4J_AUTH: ${NEO4J_USER:-neo4j}/${NEO4J_PASSWORD}
+      NEO4J_PLUGINS: '["apoc"]'
+    volumes:
+      - neo4j_data:/data
+    networks:
+      - internal
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 1g
+    volumes:
+      - qdrant_data:/qdrant/storage
+    networks:
+      - internal
+
+  api:
+    # `image` is what CI pushes/pulls from GHCR; `build` lets a plain VPS build
+    # from source with `docker compose up -d --build` (no registry/CI needed).
+    image: ghcr.io/${GITHUB_REPO:-local}/api:${IMAGE_TAG:-latest}
+    build:
+      context: ./apps/api
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 1g
+    env_file: .env.production
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-gink}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-gink}
+      NEO4J_URI: bolt://neo4j:7687
+      QDRANT_URL: http://qdrant:6333
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      # Persist uploaded cover images across deploys (local storage backend).
+      - uploads_data:/app/uploads
+    healthcheck:
+      # python is always present in the api image; curl/wget may not be.
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8080/health', timeout=3).status==200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    networks:
+      - internal
+
+  web:
+    image: ghcr.io/${GITHUB_REPO:-local}/web:${IMAGE_TAG:-latest}
+    build:
+      context: ./apps/web
+      args:
+        # NEXT_PUBLIC_* must be present at BUILD time (baked into the client bundle).
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL}
+        NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY}
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 512m
+    # clerkMiddleware runs server-side inside the web container and throws on every
+    # request when CLERK_SECRET_KEY / NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY are absent —
+    # so without these the site 500s on every page. They live in .env.production.
+    # (NEXT_PUBLIC_* are ALSO inlined into the client bundle at image-build time via
+    # the CI --build-arg; they are repeated at runtime here for the server side.)
+    env_file: .env.production
+    healthcheck:
+      # busybox wget (alpine) — spider the public hub page.
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    networks:
+      - internal
+
+  arq-worker:
+    image: ghcr.io/${GITHUB_REPO:-local}/api:${IMAGE_TAG:-latest}
+    build:
+      context: ./apps/api
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 1g
+    command: arq app.workers.export_worker.WorkerSettings
+    env_file: .env.production
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-gink}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-gink}
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - internal
+
+  backup:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - backup_data:/backups
+      - ./infra/backup.sh:/backup.sh:ro
+    entrypoint: ["sh", "-c", "echo '0 2 * * * /backup.sh' | crontab - && crond -f"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - internal
+
+networks:
+  internal:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  neo4j_data:
+  qdrant_data:
+  redis_data:
+  caddy_data:
+  caddy_config:
+  backup_data:
+  uploads_data:

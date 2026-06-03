@@ -1,3 +1,5 @@
+name: g-ink-novel-studio
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -6,7 +8,9 @@ services:
       POSTGRES_PASSWORD: gink_dev
       POSTGRES_DB: gink
     ports:
-      - "5432:5432"
+      # Bind to loopback only — dev defaults (gink/gink_dev) must not be reachable
+      # from other hosts on the network. Containers still reach it by service name.
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -21,8 +25,9 @@ services:
       NEO4J_AUTH: neo4j/gink_dev_password
       NEO4J_PLUGINS: '["apoc"]'
     ports:
-      - "7474:7474"
-      - "7687:7687"
+      # Loopback only — dev password must not be reachable off-host.
+      - "127.0.0.1:7474:7474"
+      - "127.0.0.1:7687:7687"
     volumes:
       - neo4j_data:/data
       - neo4j_logs:/logs
@@ -35,8 +40,9 @@ services:
   qdrant:
     image: qdrant/qdrant:latest
     ports:
-      - "6333:6333"
-      - "6334:6334"
+      # Loopback only — Qdrant has no auth by default.
+      - "127.0.0.1:6333:6333"
+      - "127.0.0.1:6334:6334"
     volumes:
       - qdrant_data:/qdrant/storage
 

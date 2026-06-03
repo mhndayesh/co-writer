@@ -1,111 +1,579 @@
-@import url("https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;0,500;0,600;1,400&family=Playfair+Display:wght@500;700&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400;1,6..72,500&family=Hanken+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap");
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-/* ── Theme palettes as CSS variables ─────────────────────────────────────────
-   Light = warm cream + dark ink (default before JS runs).
-   Dark  = the original Story Forge palette (burnt sienna + gold on near-black).
-   Components reference these via the Tailwind color names (bg-ink-bg, etc.). */
+/* ================================================================
+   INKWELL — Design Token System
+   2 directions (Ember / Grove) × 3 modes (Dark / Soft / Light)
+   Semantic vars: --bg --surface --surface-2 --text --muted --faint
+                  --border --border-strong --accent --accent-2
+                  --accent-text --accent-soft --shadow
+   ================================================================ */
 
 :root {
-  color-scheme: light;
-  --ink-bg: 250 247 239;
-  --ink-surface: 255 252 245;
-  --ink-surface2: 245 240 227;
-  --ink-surface3: 236 229 211;
-  --ink-border: 217 207 182;
-  --ink-borderLight: 201 189 159;
-  --ink-text: 43 32 24;
-  --ink-text2: 106 90 69;
-  --ink-text3: 142 126 102;
-  --ink-gold: 168 120 11;
-  --ink-goldLight: 200 144 16;
-  --ink-red: 138 42 26;
-  --ink-green: 45 85 48;
-  --ink-rose: 139 74 92;
-  --ink-deep: 6 4 2;
+  --font-serif: "Newsreader", Georgia, serif;
+  --font-sans:  "Hanken Grotesk", system-ui, sans-serif;
+  --font-mono:  "IBM Plex Mono", ui-monospace, monospace;
+
+  --r-sm: 6px;
+  --r-md: 10px;
+  --r-lg: 16px;
+  --r-xl: 22px;
 }
 
-.dark {
-  color-scheme: dark;
-  --ink-bg: 10 8 6;
-  --ink-surface: 21 16 9;
-  --ink-surface2: 28 22 16;
-  --ink-surface3: 35 25 14;
-  --ink-border: 42 32 22;
-  --ink-borderLight: 52 42 26;
-  --ink-text: 232 220 200;
-  --ink-text2: 154 132 104;
-  --ink-text3: 84 71 58;
-  --ink-gold: 200 152 48;
-  --ink-goldLight: 216 170 64;
-  --ink-red: 179 69 53;
-  --ink-green: 61 107 65;
-  --ink-rose: 179 102 122;
-  --ink-deep: 6 4 2;
+/* ── Ember × Soft (default) ── */
+[data-dir="ember"][data-mode="soft"],
+:root {
+  --bg:           oklch(0.892 0.020 70);
+  --surface:      oklch(0.935 0.017 72);
+  --surface-2:    oklch(0.850 0.022 68);
+  --text:         oklch(0.270 0.022 50);
+  --muted:        oklch(0.420 0.024 52);
+  --faint:        oklch(0.545 0.022 58);
+  --border:       oklch(0.760 0.026 66);
+  --border-strong:oklch(0.630 0.030 62);
+  --accent:       oklch(0.535 0.135 46);
+  --accent-2:     oklch(0.475 0.105 38);
+  --accent-text:  oklch(0.985 0.010 80);
+  --accent-soft:  oklch(0.815 0.052 60);
+  --shadow:       0 1px 2px oklch(0.35 0.04 50 / 0.14), 0 10px 26px oklch(0.35 0.04 50 / 0.10);
+
+  /* Tailwind RGB bridges (for opacity modifiers like bg-iw-surface/50) */
+  --iw-bg:           226 213 196;
+  --iw-surface:      242 232 217;
+  --iw-surface-2:    211 197 177;
+  --iw-text:         55  38  22;
+  --iw-muted:        98  70  44;
+  --iw-faint:        128 103 73;
+  --iw-border:       186 167 142;
+  --iw-border-s:     148 123 91;
+  --iw-accent:       168 78  25;
+  --iw-accent-2:     145 65  28;
+  --iw-accent-text:  252 249 244;
+  --iw-accent-soft:  205 179 148;
 }
+
+/* ── Ember × Dark ── */
+[data-dir="ember"][data-mode="dark"],
+.dark {
+  --bg:           oklch(0.205 0.014 56);
+  --surface:      oklch(0.258 0.016 56);
+  --surface-2:    oklch(0.310 0.018 56);
+  --text:         oklch(0.935 0.012 72);
+  --muted:        oklch(0.745 0.016 66);
+  --faint:        oklch(0.600 0.018 62);
+  --border:       oklch(0.410 0.022 58);
+  --border-strong:oklch(0.530 0.026 58);
+  --accent:       oklch(0.730 0.130 56);
+  --accent-2:     oklch(0.660 0.120 42);
+  --accent-text:  oklch(0.200 0.020 50);
+  --accent-soft:  oklch(0.330 0.050 54);
+  --shadow:       0 1px 2px oklch(0 0 0 / 0.40), 0 12px 30px oklch(0 0 0 / 0.45);
+
+  --iw-bg:           38  35  31;
+  --iw-surface:      50  46  40;
+  --iw-surface-2:    62  57  50;
+  --iw-text:         236 228 212;
+  --iw-muted:        180 166 146;
+  --iw-faint:        142 128 106;
+  --iw-border:       82  73  60;
+  --iw-border-s:     110 97  79;
+  --iw-accent:       204 147 59;
+  --iw-accent-2:     183 125 56;
+  --iw-accent-text:  38  28  18;
+  --iw-accent-soft:  66  54  38;
+}
+
+/* ── Ember × Light ── */
+[data-dir="ember"][data-mode="light"] {
+  --bg:           oklch(0.975 0.010 74);
+  --surface:      oklch(0.998 0.006 80);
+  --surface-2:    oklch(0.945 0.013 72);
+  --text:         oklch(0.255 0.020 50);
+  --muted:        oklch(0.460 0.022 54);
+  --faint:        oklch(0.620 0.018 60);
+  --border:       oklch(0.855 0.018 68);
+  --border-strong:oklch(0.730 0.024 64);
+  --accent:       oklch(0.560 0.140 47);
+  --accent-2:     oklch(0.500 0.110 38);
+  --accent-text:  oklch(0.995 0.010 80);
+  --accent-soft:  oklch(0.930 0.045 60);
+  --shadow:       0 1px 2px oklch(0.55 0.04 50 / 0.10), 0 8px 24px oklch(0.55 0.04 50 / 0.08);
+
+  --iw-bg:           249 245 239;
+  --iw-surface:      255 254 252;
+  --iw-surface-2:    242 236 226;
+  --iw-text:         52  36  20;
+  --iw-muted:        104 78  54;
+  --iw-faint:        144 119 93;
+  --iw-border:       210 193 168;
+  --iw-border-s:     172 147 114;
+  --iw-accent:       172 82  28;
+  --iw-accent-2:     148 68  28;
+  --iw-accent-text:  255 253 250;
+  --iw-accent-soft:  238 218 194;
+}
+
+/* ── Grove × Dark ── */
+[data-dir="grove"][data-mode="dark"] {
+  --bg:           oklch(0.205 0.016 158);
+  --surface:      oklch(0.258 0.018 158);
+  --surface-2:    oklch(0.310 0.020 158);
+  --text:         oklch(0.930 0.012 142);
+  --muted:        oklch(0.730 0.016 148);
+  --faint:        oklch(0.590 0.018 150);
+  --border:       oklch(0.410 0.024 152);
+  --border-strong:oklch(0.530 0.028 152);
+  --accent:       oklch(0.700 0.120 152);
+  --accent-2:     oklch(0.620 0.105 162);
+  --accent-text:  oklch(0.180 0.020 155);
+  --accent-soft:  oklch(0.320 0.050 152);
+  --shadow:       0 1px 2px oklch(0 0 0 / 0.40), 0 12px 30px oklch(0 0 0 / 0.45);
+
+  --iw-bg:           30  38  34;
+  --iw-surface:      40  52  46;
+  --iw-surface-2:    52  64  58;
+  --iw-text:         230 238 228;
+  --iw-muted:        162 180 168;
+  --iw-faint:        128 146 136;
+  --iw-border:       70  88  78;
+  --iw-border-s:     96  118 106;
+  --iw-accent:       88  174 144;
+  --iw-accent-2:     68  152 128;
+  --iw-accent-text:  18  38  30;
+  --iw-accent-soft:  42  72  58;
+}
+
+/* ── Grove × Soft ── */
+[data-dir="grove"][data-mode="soft"] {
+  --bg:           oklch(0.892 0.020 138);
+  --surface:      oklch(0.934 0.017 140);
+  --surface-2:    oklch(0.850 0.022 136);
+  --text:         oklch(0.260 0.022 155);
+  --muted:        oklch(0.415 0.024 152);
+  --faint:        oklch(0.540 0.022 150);
+  --border:       oklch(0.758 0.026 136);
+  --border-strong:oklch(0.628 0.030 138);
+  --accent:       oklch(0.480 0.100 150);
+  --accent-2:     oklch(0.415 0.082 160);
+  --accent-text:  oklch(0.985 0.010 150);
+  --accent-soft:  oklch(0.810 0.050 150);
+  --shadow:       0 1px 2px oklch(0.30 0.04 150 / 0.14), 0 10px 26px oklch(0.30 0.04 150 / 0.10);
+
+  --iw-bg:           210 224 214;
+  --iw-surface:      230 240 232;
+  --iw-surface-2:    194 212 200;
+  --iw-text:         26  54  40;
+  --iw-muted:        68  108 84;
+  --iw-faint:        100 138 116;
+  --iw-border:       162 188 170;
+  --iw-border-s:     122 155 136;
+  --iw-accent:       42  128 96;
+  --iw-accent-2:     34  108 84;
+  --iw-accent-text:  248 252 250;
+  --iw-accent-soft:  180 218 198;
+}
+
+/* ── Grove × Light ── */
+[data-dir="grove"][data-mode="light"] {
+  --bg:           oklch(0.975 0.010 142);
+  --surface:      oklch(0.998 0.006 150);
+  --surface-2:    oklch(0.944 0.013 140);
+  --text:         oklch(0.250 0.020 155);
+  --muted:        oklch(0.440 0.022 152);
+  --faint:        oklch(0.600 0.018 150);
+  --border:       oklch(0.855 0.018 138);
+  --border-strong:oklch(0.725 0.024 140);
+  --accent:       oklch(0.500 0.105 150);
+  --accent-2:     oklch(0.430 0.085 160);
+  --accent-text:  oklch(0.995 0.010 150);
+  --accent-soft:  oklch(0.920 0.042 150);
+  --shadow:       0 1px 2px oklch(0.45 0.04 150 / 0.10), 0 8px 24px oklch(0.45 0.04 150 / 0.08);
+
+  --iw-bg:           242 248 243;
+  --iw-surface:      254 255 254;
+  --iw-surface-2:    234 244 237;
+  --iw-text:         22  50  36;
+  --iw-muted:        76  114 92;
+  --iw-faint:        110 148 126;
+  --iw-border:       196 220 204;
+  --iw-border-s:     152 184 164;
+  --iw-accent:       38  120 90;
+  --iw-accent-2:     28  102 76;
+  --iw-accent-text:  250 254 252;
+  --iw-accent-soft:  202 236 218;
+}
+
+/* ================================================================
+   BACKWARD COMPAT — old --ink-* vars mapped to new tokens
+   Studio pages use these through Tailwind (bg-ink-bg, text-ink-text, etc.)
+   ================================================================ */
+
+:root,
+[data-mode="soft"],
+[data-mode="light"],
+[data-mode="dark"],
+.dark {
+  /* Surfaces */
+  --ink-bg:          var(--iw-bg);
+  --ink-surface:     var(--iw-surface);
+  --ink-surface2:    var(--iw-surface-2);
+  --ink-surface3:    var(--iw-surface-2);
+
+  /* Borders */
+  --ink-border:      var(--iw-border);
+  --ink-borderLight: var(--iw-border-s);
+
+  /* Text */
+  --ink-text:        var(--iw-text);
+  --ink-text2:       var(--iw-muted);
+  --ink-text3:       var(--iw-faint);
+
+  /* Accent */
+  --ink-gold:        var(--iw-accent);
+  --ink-goldLight:   var(--iw-accent-2);
+  --ink-deep:        0 0 0;
+
+  /* Fixed semantic colors (not mode-dependent) */
+  --ink-red:         180 62  46;
+  --ink-green:       52  108 60;
+  --ink-rose:        168 88  110;
+}
+
+/* ================================================================
+   BASE
+   ================================================================ */
+* { box-sizing: border-box; }
+
+*, *::before, *::after { box-sizing: border-box; }
 
 html, body {
-  background: rgb(var(--ink-bg));
-  color: rgb(var(--ink-text));
-  font-family: "Lora", Georgia, serif;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Hanken Grotesk", system-ui, sans-serif !important;
+  font-size: 16px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
   min-height: 100vh;
+  transition: background 0.3s ease, color 0.3s ease;
+  font-synthesis: none;
 }
 
-h1, h2, h3, h4 { font-family: "Playfair Display", "Lora", serif; }
+/* Tailwind preflight resets font-family to inherit — restore it */
+button, input, select, textarea, a {
+  font-family: "Hanken Grotesk", system-ui, sans-serif;
+}
 
-::selection { background: rgb(var(--ink-gold) / 0.35); color: rgb(var(--ink-deep)); }
+/* Headings use Newsreader — override Tailwind preflight (font-size: inherit) */
+h1, h2, h3, h4, h5, h6 {
+  font-family: "Newsreader", Georgia, serif !important;
+  font-weight: 500;
+  line-height: 1.12;
+  margin: 0;
+  letter-spacing: -0.01em;
+}
+
+/* Prevent text overflow in nav / buttons */
+nav a, header a, header button {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+p { margin: 0; }
+a { color: inherit; }
+
+/* Prevent content from hiding under the sticky GlobalNav (h=56px) */
+main { min-height: calc(100vh - 56px); }
+
+/* ================================================================
+   TYPOGRAPHY UTILITIES
+   ================================================================ */
+.font-serif  { font-family: var(--font-serif); }
+.font-sans   { font-family: var(--font-sans); }
+.font-mono   { font-family: var(--font-mono); }
+
+.reading {
+  font-family: var(--font-serif);
+  font-size: 19px;
+  line-height: 1.75;
+  max-width: 62ch;
+}
+
+.drop-cap::first-letter {
+  font-size: 3.4em;
+  float: left;
+  line-height: 0.8;
+  padding: 6px 10px 0 0;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.kicker {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--accent);
+  font-weight: 500;
+}
+
+/* ================================================================
+   INK DROP MARK (CSS-only logo — rotated square)
+   ================================================================ */
+.ink-drop {
+  width: var(--d, 22px);
+  height: var(--d, 22px);
+  background: var(--accent);
+  border-radius: 50% 50% 50% 4px;
+  transform: rotate(45deg);
+  flex: none;
+  display: inline-block;
+}
+.ink-drop.ring {
+  background: transparent;
+  border: 2.5px solid var(--accent);
+}
+.ink-drop.on-accent {
+  background: var(--accent-text);
+}
+
+.ink-tile {
+  width: 40px;
+  height: 40px;
+  background: var(--accent);
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  flex: none;
+}
+
+/* ================================================================
+   INKWELL COMPONENT PRIMITIVES (used by new hub / reader pages)
+   ================================================================ */
+
+/* Cards */
+.iw-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  padding: 24px;
+  box-shadow: var(--shadow);
+}
+.iw-card.inset { background: var(--surface-2); }
+
+/* Buttons */
+.iw-btn {
+  font-family: var(--font-sans);
+  font-weight: 700;
+  font-size: 14px;
+  border-radius: 999px;
+  padding: 10px 22px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: all 0.18s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  line-height: 1;
+  text-decoration: none;
+}
+.iw-btn.primary {
+  background: var(--accent);
+  color: var(--accent-text);
+}
+.iw-btn.primary:hover { filter: brightness(1.06); }
+.iw-btn.secondary {
+  background: var(--surface-2);
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+.iw-btn.secondary:hover { border-color: var(--accent); color: var(--accent); }
+.iw-btn.ghost {
+  background: transparent;
+  color: var(--muted);
+}
+.iw-btn.ghost:hover { color: var(--text); background: var(--surface-2); }
+
+/* Chips */
+.iw-chip {
+  font-size: 13px;
+  font-weight: 600;
+  padding: 5px 13px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  color: var(--muted);
+  background: var(--surface);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.iw-chip.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: transparent;
+}
+.iw-chip:hover:not(.active) { border-color: var(--accent); color: var(--accent); }
+
+/* Badge */
+.iw-badge {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 3px 8px;
+  border-radius: var(--r-sm);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 500;
+}
+
+/* Input */
+.iw-input {
+  font-family: var(--font-sans);
+  font-size: 15px;
+  padding: 10px 14px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--border-strong);
+  background: var(--bg);
+  color: var(--text);
+  width: 100%;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.iw-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.iw-input::placeholder { color: var(--faint); }
+
+/* Labels (mono, uppercase) */
+.iw-label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--faint);
+  display: block;
+  margin-bottom: 6px;
+}
+
+/* Separator */
+.iw-sep {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 0;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+
+/* Selection */
+::selection { background: var(--accent-soft); color: var(--text); }
+
+/* ================================================================
+   LEGACY FORM PRIMITIVES — used by Primitives.tsx (Inp, Sel, FG, Btn)
+   ================================================================ */
+
+/* Label above a form field */
+.label {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--faint);
+  margin-bottom: 6px;
+}
+
+/* Input / select / textarea shared style */
+.input {
+  display: block;
+  width: 100%;
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  padding: 9px 12px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--border-strong);
+  background: var(--bg);
+  color: var(--text);
+  transition: border-color 0.15s, box-shadow 0.15s;
+  -webkit-appearance: none;
+}
+.input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.input::placeholder { color: var(--faint); }
+.input:disabled { opacity: 0.55; cursor: not-allowed; }
+
+/* card-ink used by Card primitive */
+.card-ink {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow);
+}
+
+/* ================================================================
+   LEGACY CLASSES — kept for backward compat with studio pages
+   ================================================================ */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: 6px;
+  border: 1px solid rgb(var(--ink-border));
+  background: rgb(var(--ink-surface2));
+  color: rgb(var(--ink-text2));
+  font-size: 13px;
+  font-weight: 500;
+  padding: 6px 14px;
+  cursor: pointer;
+  transition: all 0.15s;
+  font-family: var(--font-sans);
+  text-decoration: none;
+}
+.btn:hover { color: rgb(var(--ink-text)); border-color: rgb(var(--ink-borderLight)); }
+.btn-primary {
+  background: rgb(var(--ink-gold));
+  color: rgb(var(--ink-deep));
+  border-color: transparent;
+}
+.btn-primary:hover { filter: brightness(1.08); }
 
 input, textarea, select {
-  background: rgb(var(--ink-surface));
-  color: rgb(var(--ink-text));
-  border: 1px solid rgb(var(--ink-border));
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  font-family: var(--font-sans);
+  font-size: 14px;
 }
 input:focus, textarea:focus, select:focus {
   outline: none;
-  border-color: rgb(var(--ink-gold));
-  box-shadow: 0 0 0 1px rgb(var(--ink-gold) / 0.4);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
-button { font-family: inherit; }
+.scrollbar-thin::-webkit-scrollbar { width: 4px; }
 
-@keyframes busy-fade-in {
-  from { opacity: 0; }
-  to   { opacity: 1; }
-}
-.busy-fade-in { animation: busy-fade-in 180ms ease-out; }
-
-.scrollbar-thin::-webkit-scrollbar { width: 8px; height: 8px; }
-.scrollbar-thin::-webkit-scrollbar-thumb { background: rgb(var(--ink-border)); border-radius: 4px; }
-.scrollbar-thin::-webkit-scrollbar-thumb:hover { background: rgb(var(--ink-borderLight)); }
-
-@layer components {
-  .card-ink {
-    @apply bg-ink-surface border border-ink-border rounded-md shadow-ink;
-  }
-  .btn {
-    @apply inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium transition-colors;
-    @apply bg-ink-surface2 border border-ink-border text-ink-text hover:border-ink-gold hover:text-ink-goldLight;
-  }
-  .btn-primary {
-    background: rgb(var(--ink-gold));
-    color: rgb(var(--ink-deep));
-    border: 1px solid rgb(var(--ink-gold));
-  }
-  .btn-primary:hover {
-    background: rgb(var(--ink-goldLight));
-    border-color: rgb(var(--ink-goldLight));
-    color: rgb(var(--ink-deep));
-  }
-  .dark .btn-primary { color: #060402; }
-  .btn-ghost {
-    @apply bg-transparent border-transparent text-ink-text2 hover:text-ink-goldLight;
-  }
-  .input {
-    @apply w-full rounded-md px-3 py-2 text-sm;
-  }
-  .label {
-    @apply text-xs uppercase tracking-wider text-ink-text2 mb-1.5 block;
-  }
+/* ================================================================
+   MOBILE (phones ≤ 640px)
+   Scale the rem-based UI down so desktop-sized text, padding and gaps
+   aren't oversized on a phone. Tailwind utilities (text-*, p-*, gap-*,
+   rem widths) shrink with the root font-size; explicit-px values
+   (text-[10px] labels, lucide icon sizes) are intentionally unaffected.
+   ================================================================ */
+@media (max-width: 640px) {
+  html, body { font-size: 14.5px; }
+  .reading   { font-size: 16.5px; line-height: 1.7; }
+  /* Sticky GlobalNav is shorter on phones — keep content clear of it. */
+  main { min-height: calc(100vh - 52px); }
 }

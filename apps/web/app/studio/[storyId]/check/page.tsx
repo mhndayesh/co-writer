@@ -5,6 +5,8 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { ShieldCheck, AlertOctagon, AlertTriangle, Info } from "lucide-react";
 import * as api from "@/lib/api";
 import { Btn, Card, FG, PageHdr, Sel, Tag } from "@/components/ui/Primitives";
+import { AiLockNotice } from "@/components/billing/AiLockNotice";
+import { useEntitlement } from "@/lib/useEntitlement";
 
 const SEVERITY_TAG: Record<string, any> = { high: { color: "red", icon: AlertOctagon }, medium: { color: "gold", icon: AlertTriangle }, low: { color: "muted", icon: Info } };
 const PASSES = [
@@ -18,6 +20,7 @@ const PASSES = [
 export default function CheckPage() {
   const { storyId } = useParams<{ storyId: string }>();
   const { data: chapters } = useQuery({ queryKey: ["chapters", storyId], queryFn: () => api.listChapters(storyId) });
+  const { aiAvailable } = useEntitlement();
   const [chapterId, setChapterId] = useState("");
   const [passType, setPassType] = useState("logic");
 
@@ -29,6 +32,8 @@ export default function CheckPage() {
   return (
     <div className="max-w-4xl">
       <PageHdr title="◇ Story Check" subtitle="Reads the chapter against your world, cast, and history — uses Graph-RAG for subtle continuity slips." />
+
+      <AiLockNotice />
 
       <Card className="mb-4">
         <div className="grid gap-3 md:grid-cols-[1fr_220px_auto] items-end">
@@ -43,17 +48,35 @@ export default function CheckPage() {
               {PASSES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
             </Sel>
           </FG>
-          <Btn variant="primary" disabled={!chapterId || run.isPending} onClick={() => run.mutate()} className="mb-3">
+          <Btn variant="primary" disabled={!chapterId || run.isPending || !aiAvailable} onClick={() => run.mutate()} className="mb-3">
             <ShieldCheck size={14}/> {run.isPending ? "Reading…" : "Run check"}
           </Btn>
         </div>
       </Card>
 
+      {run.isError && (
+        <Card className="mb-4 border-ink-red/40">
+          <p className="text-ink-red text-sm font-medium">Story Check couldn’t run.</p>
+          <p className="text-ink-text3 text-sm mt-0.5">
+            {run.error instanceof Error ? run.error.message : "Something went wrong."}
+          </p>
+          <Btn variant="ghost" className="mt-2" onClick={() => run.mutate()}>Try again</Btn>
+        </Card>
+      )}
+
+      {run.isSuccess && !run.data?.fallback
+        && (run.data?.findings || []).length === 0
+        && (run.data?.strengths || []).length === 0 && (
+        <Card className="mb-4">
+          <p className="text-sm text-ink-text2">No issues or notes came back for this pass. Try another revision pass, or check your AI model in Settings if you expected findings.</p>
+        </Card>
+      )}
+
       {run.data && (
         <>
           <Card className="mb-4">
             <h3 className="font-display text-lg mb-2">Severity</h3>
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
               <Tag color="green">{run.data.pass_type || passType}</Tag>
               <Tag color="red">High · {run.data.severity_buckets?.high ?? 0}</Tag>
               <Tag color="gold">Medium · {run.data.severity_buckets?.medium ?? 0}</Tag>

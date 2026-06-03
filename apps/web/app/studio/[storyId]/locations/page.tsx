@@ -4,12 +4,12 @@ import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Plus, X } from "lucide-react";
 import * as api from "@/lib/api";
-import { Btn, Card, FG, Inp, PageHdr, Ta } from "@/components/ui/Primitives";
+import { Btn, Card, FG, Inp, PageHdr, QueryError, Ta } from "@/components/ui/Primitives";
 
 export default function LocationsPage() {
   const { storyId } = useParams<{ storyId: string }>();
   const qc = useQueryClient();
-  const { data } = useQuery({ queryKey: ["locations", storyId], queryFn: () => api.listLocations(storyId) });
+  const { data, isError, error, refetch } = useQuery({ queryKey: ["locations", storyId], queryFn: () => api.listLocations(storyId) });
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
 
@@ -30,6 +30,7 @@ export default function LocationsPage() {
         <FG label="Description"><Ta value={description} onChange={e => setDescription(e.target.value)} /></FG>
         <div className="flex justify-end"><Btn variant="primary" disabled={!name.trim() || create.isPending} onClick={() => create.mutate()}><Plus size={14}/> Add location</Btn></div>
       </Card>
+      {isError && <QueryError error={error} retry={refetch} what="locations" />}
       <ul className="space-y-2">
         {(data || []).map((l: any) => (
           <li key={l.id}>
@@ -38,7 +39,7 @@ export default function LocationsPage() {
                 <h3 className="font-display text-lg">{l.name}</h3>
                 <p className="text-sm text-ink-text2">{l.description}</p>
               </div>
-              <button onClick={() => del.mutate(l.id)} className="text-ink-text3 hover:text-ink-red"><X size={16}/></button>
+              <button onClick={() => { if (confirm(`Delete location "${l.name}"? This can't be undone.`)) del.mutate(l.id); }} className="text-ink-text3 hover:text-ink-red"><X size={16}/></button>
             </Card>
           </li>
         ))}

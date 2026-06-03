@@ -4,14 +4,14 @@ import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Plus, X } from "lucide-react";
 import * as api from "@/lib/api";
-import { Btn, Card, FG, Inp, PageHdr, Sel, Ta, Tag } from "@/components/ui/Primitives";
+import { Btn, Card, FG, Inp, PageHdr, QueryError, Sel, Ta, Tag } from "@/components/ui/Primitives";
 
 const STATUSES = ["open", "paid_off", "abandoned"];
 
 export default function ThreadsPage() {
   const { storyId } = useParams<{ storyId: string }>();
   const qc = useQueryClient();
-  const { data } = useQuery({ queryKey: ["threads", storyId], queryFn: () => api.listThreads(storyId) });
+  const { data, isError, error, refetch } = useQuery({ queryKey: ["threads", storyId], queryFn: () => api.listThreads(storyId) });
   const { data: weave } = useQuery({ queryKey: ["weave", storyId], queryFn: () => api.listWeave(storyId) });
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -90,6 +90,7 @@ export default function ThreadsPage() {
           </table>
         </Card>
       )}
+      {isError && <QueryError error={error} retry={refetch} what="plot threads" />}
       <ul className="space-y-2">
         {(data || []).map((t: any) => (
           <li key={t.id}>

@@ -1,27 +1,28 @@
 "use client";
 import { useParams } from "next/navigation";
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Plus, Trash2, Link as LinkIcon, X, RefreshCcw } from "lucide-react";
+import { Plus, Trash2, Drama, ArrowRight } from "lucide-react";
 import * as api from "@/lib/api";
-import { Btn, Card, FG, Inp, PageHdr, Sel, Ta, Tag } from "@/components/ui/Primitives";
+import { Btn, Card, FG, Inp, PageHdr, QueryError, Sel, Tag } from "@/components/ui/Primitives";
 import { useDebouncedSave } from "@/lib/debounce";
 
+// The Characters tab is now a lightweight ROSTER: name, role, status, age, icon.
+// All depth — personality, behavior, voice fingerprint, relationship masks,
+// current state — lives in the Character Voice Studio (one source of truth).
 const ROLES = ["protagonist", "antagonist", "ally", "mentor", "rival", "love interest", "supporting"];
 const STATUSES = ["alive", "dead", "unknown", "missing", "transformed"];
-const REL_TYPES = ["ally", "enemy", "lover", "rival", "family", "mentor", "student", "colleague"];
 
 export default function CharactersPage() {
   const { storyId } = useParams<{ storyId: string }>();
   const qc = useQueryClient();
 
-  const { data: characters } = useQuery({ queryKey: ["characters", storyId], queryFn: () => api.listCharacters(storyId) });
-  const { data: voiceProfiles } = useQuery({ queryKey: ["voice", storyId], queryFn: () => api.listVoiceProfiles(storyId) });
+  const { data: characters, isError, error, refetch } = useQuery({ queryKey: ["characters", storyId], queryFn: () => api.listCharacters(storyId) });
   const [activeId, setActiveId] = useState<string | null>(null);
   useEffect(() => { if (!activeId && characters && characters.length > 0) setActiveId(characters[0].id); }, [characters, activeId]);
 
   const active = useMemo(() => characters?.find((c: any) => c.id === activeId) || null, [characters, activeId]);
-  const activeVoice = useMemo(() => voiceProfiles?.find((p: any) => p.character_id === activeId) || null, [voiceProfiles, activeId]);
   const [draft, setDraft] = useState<any>(null);
   useEffect(() => { setDraft(active ? { ...active } : null); }, [active]);
 
@@ -37,40 +38,19 @@ export default function CharactersPage() {
     mutationFn: () => api.deleteCharacter(storyId, activeId!),
     onSuccess: () => { setActiveId(null); qc.invalidateQueries({ queryKey: ["characters", storyId] }); },
   });
-  const rebuildVoice = useMutation({
-    mutationFn: () => api.rebuildVoiceProfiles(storyId),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["voice", storyId] }),
-  });
 
+  // Autosave only the roster basics (name/role/status/age/icon).
   useDebouncedSave(draft, 900, (d) => {
     if (!d || !activeId) return;
-    const { id, story_id, ...patchable } = d;
-    patch.mutate(patchable);
-  });
-
-  // Relationships
-  const { data: rels } = useQuery({
-    queryKey: ["relationships", storyId, activeId],
-    queryFn: () => api.listRelationships(storyId, activeId!),
-    enabled: !!activeId,
-  });
-  const [relTarget, setRelTarget] = useState("");
-  const [relType, setRelType] = useState(REL_TYPES[0]);
-  const [relDesc, setRelDesc] = useState("");
-  const addRel = useMutation({
-    mutationFn: () => api.addRelationship(storyId, activeId!, { target_id: relTarget, type: relType, description: relDesc }),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["relationships", storyId, activeId] }); setRelTarget(""); setRelDesc(""); },
-  });
-  const delRel = useMutation({
-    mutationFn: (relId: string) => api.deleteRelationship(storyId, relId),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["relationships", storyId, activeId] }),
+    patch.mutate({ name: d.name, role: d.role, status: d.status, age: d.age, icon: d.icon });
   });
 
   return (
-    <div className="grid grid-cols-[260px_1fr] gap-6 max-w-7xl">
+    <div className="grid grid-cols-1 lg:grid-cols-[260px_1fr] gap-4 lg:gap-6 max-w-7xl">
       <aside>
         <PageHdr title="◈ Characters" />
         <Btn variant="primary" className="w-full mb-3" onClick={() => create.mutate()}><Plus size={14}/> New character</Btn>
+        {isError && <div className="mb-3"><QueryError error={error} retry={refetch} what="your characters" /></div>}
         <ul className="space-y-1">
           {(characters || []).map((c: any) => (
             <li key={c.id}>
@@ -88,7 +68,7 @@ export default function CharactersPage() {
           <>
             <PageHdr
               title={draft.name}
-              subtitle="Autosaves as you type."
+              subtitle="Basic roster info. Autosaves as you type."
               right={<Btn variant="ghost" onClick={() => { if (confirm("Delete this character?")) del.mutate(); }}><Trash2 size={14}/> Delete</Btn>}
             />
 
@@ -109,73 +89,29 @@ export default function CharactersPage() {
                 <FG label="Age"><Inp value={draft.age || ""} onChange={e => setDraft({ ...draft, age: e.target.value })} /></FG>
                 <FG label="Icon"><Inp value={draft.icon || ""} onChange={e => setDraft({ ...draft, icon: e.target.value })} placeholder="emoji or short text" /></FG>
               </div>
-              <FG label="Appearance"><Ta value={draft.appearance || ""} onChange={e => setDraft({ ...draft, appearance: e.target.value })} /></FG>
-              <FG label="Personality"><Ta value={draft.personality || ""} onChange={e => setDraft({ ...draft, personality: e.target.value })} /></FG>
-              <FG label="Backstory"><Ta value={draft.backstory || ""} onChange={e => setDraft({ ...draft, backstory: e.target.value })} /></FG>
-              <div className="grid gap-3 md:grid-cols-2">
-                <FG label="Motivation"><Ta rows={3} value={draft.motivation || ""} onChange={e => setDraft({ ...draft, motivation: e.target.value })} /></FG>
-                <FG label="Fatal flaw"><Ta rows={3} value={draft.flaw || ""} onChange={e => setDraft({ ...draft, flaw: e.target.value })} /></FG>
-              </div>
-              <FG label="Character arc"><Ta value={draft.arc || ""} onChange={e => setDraft({ ...draft, arc: e.target.value })} /></FG>
-            </Card>
-
-            <Card className="mb-4">
-              <div className="flex items-center justify-between gap-2 mb-3">
-                <h3 className="font-display text-lg">Voice Fingerprint</h3>
-                <Btn variant="ghost" disabled={rebuildVoice.isPending} onClick={() => rebuildVoice.mutate()}><RefreshCcw size={14}/> Rebuild</Btn>
-              </div>
-              {activeVoice && activeVoice.sample_count > 0 ? (
-                <>
-                  <div className="grid gap-2 md:grid-cols-4">
-                    <Tag color="gold">Samples {activeVoice.sample_count}</Tag>
-                    <Tag color="muted">Avg {activeVoice.avg_sentence_words} words</Tag>
-                    <Tag color="muted">Questions {Math.round(activeVoice.question_rate * 100)}%</Tag>
-                    <Tag color="muted">Exclaims {Math.round(activeVoice.exclamation_rate * 100)}%</Tag>
-                  </div>
-                  <div className="mt-3 grid gap-3 md:grid-cols-2 text-sm text-ink-text2">
-                    <p>Vocabulary variety: <strong className="text-ink-text">{Math.round(activeVoice.vocabulary_variety * 100)}%</strong></p>
-                    <p>Dialogue share: <strong className="text-ink-text">{Math.round(activeVoice.dialogue_share * 100)}%</strong></p>
-                  </div>
-                  {(activeVoice.repeated_phrases || []).length > 0 && (
-                    <div className="mt-3 flex flex-wrap gap-1">
-                      {activeVoice.repeated_phrases.map((p: string) => <Tag key={p} color="rose">{p}</Tag>)}
-                    </div>
-                  )}
-                </>
-              ) : (
-                <p className="text-sm text-ink-text3">No attributed dialogue samples yet.</p>
-              )}
             </Card>
 
             <Card>
-              <h3 className="font-display text-lg mb-2 flex items-center gap-2"><LinkIcon size={16}/> Relationships</h3>
-              <div className="grid gap-2 md:grid-cols-[1fr_180px_1fr_auto] items-end mb-3">
-                <FG label="Target">
-                  <Sel value={relTarget} onChange={e => setRelTarget(e.target.value)}>
-                    <option value="">— pick character —</option>
-                    {(characters || []).filter((c: any) => c.id !== activeId).map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
-                  </Sel>
-                </FG>
-                <FG label="Type">
-                  <Sel value={relType} onChange={e => setRelType(e.target.value)}>
-                    {REL_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
-                  </Sel>
-                </FG>
-                <FG label="Description"><Inp value={relDesc} onChange={e => setRelDesc(e.target.value)} /></FG>
-                <Btn variant="primary" disabled={!relTarget} className="mb-3" onClick={() => addRel.mutate()}><Plus size={14}/> Add</Btn>
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <h3 className="font-display text-lg flex items-center gap-2"><Drama size={16}/> Full identity & voice</h3>
+                  <p className="text-sm text-ink-text2 mt-1">
+                    Personality, behavior, voice fingerprint, relationship masks and current state now live in the Voice Studio.
+                  </p>
+                </div>
+                <Link href={`/studio/${storyId}/voice?character=${active.id}`}
+                  className="shrink-0 inline-flex items-center gap-1.5 px-4 py-2 rounded-md text-sm font-semibold bg-ink-gold text-ink-deep hover:brightness-110 transition">
+                  Edit in Voice Studio <ArrowRight size={14}/>
+                </Link>
               </div>
-              <ul className="space-y-1">
-                {(rels || []).map((r: any) => {
-                  const target = characters?.find((c: any) => c.id === r.target_id);
-                  return (
-                    <li key={r.id} className="flex items-center justify-between gap-2 text-sm py-1.5 px-2 rounded hover:bg-ink-surface2">
-                      <span><strong>{target?.name || "?"}</strong> — <Tag>{r.type}</Tag>{r.description && <span className="text-ink-text2 ml-2">{r.description}</span>}</span>
-                      <button onClick={() => delRel.mutate(r.id)} className="text-ink-text3 hover:text-ink-red"><X size={14}/></button>
-                    </li>
-                  );
-                })}
-                {(!rels || rels.length === 0) && <li className="text-sm text-ink-text3">No relationships yet.</li>}
-              </ul>
+              {(active.personality || active.backstory || active.motivation) && (
+                <div className="mt-3 pt-3 border-t border-ink-border text-sm text-ink-text2 space-y-1">
+                  <p className="label">Compiled summary (read-only)</p>
+                  {active.personality && <p><Tag color="muted">personality</Tag> {active.personality}</p>}
+                  {active.motivation && <p><Tag color="muted">motivation</Tag> {active.motivation}</p>}
+                  {active.flaw && <p><Tag color="muted">flaw</Tag> {active.flaw}</p>}
+                </div>
+              )}
             </Card>
           </>
         )}

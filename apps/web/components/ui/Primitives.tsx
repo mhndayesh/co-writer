@@ -34,13 +34,30 @@ export function Card({ className, children }: { className?: string; children: Re
 
 export function PageHdr({ title, subtitle, right }: { title: string; subtitle?: string; right?: ReactNode }) {
   return (
-    <header className="mb-6 flex items-end justify-between gap-4 border-b border-ink-border pb-4">
-      <div>
-        <h1 className="text-2xl font-display text-ink-text">{title}</h1>
+    <header className="mb-6 flex flex-col gap-3 border-b border-ink-border pb-4 sm:flex-row sm:items-end sm:justify-between sm:gap-4">
+      <div className="min-w-0">
+        <h1 className="text-xl sm:text-2xl font-display text-ink-text">{title}</h1>
         {subtitle && <p className="text-sm text-ink-text2 mt-1">{subtitle}</p>}
       </div>
-      {right}
+      {right && <div className="shrink-0">{right}</div>}
     </header>
+  );
+}
+
+// Shown when a list/data query FAILS — so a failed fetch is no longer
+// indistinguishable from "you have no data" (which reads as "your data is gone").
+// Pass the query's `error` and `refetch` so the writer can retry in place.
+export function QueryError({ error, retry, what = "this" }: { error: unknown; retry?: () => void; what?: string }) {
+  const msg = error instanceof Error ? error.message : "Something went wrong loading your data.";
+  return (
+    <div className="rounded-lg border border-ink-red/40 bg-ink-red/10 px-4 py-3 text-sm text-ink-text2">
+      <p className="text-ink-red font-medium">Couldn’t load {what}.</p>
+      <p className="mt-0.5 text-ink-text3">{msg}</p>
+      <p className="mt-0.5 text-ink-text3">Your work is safe — this is a loading error, not missing data.</p>
+      {retry && (
+        <Btn variant="ghost" className="mt-2" onClick={() => retry()}>Try again</Btn>
+      )}
+    </div>
   );
 }
 

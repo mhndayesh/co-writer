@@ -1,30 +1,42 @@
-// Theme persistence. The actual class application happens in a blocking
-// inline script (see ThemeBoot in app/layout.tsx) so the page paints with
-// the right palette — no white flash on a dark-themed user's load.
+export type Mode = "dark" | "soft" | "light";
+export type Direction = "ember" | "grove";
 
-export type Theme = "light" | "dark";
+export const THEME_KEY = "inkwell-theme";
 
-export const THEME_KEY = "gink-theme";
-
-export function getStoredTheme(): Theme | null {
+export function getStoredMode(): Mode | null {
   if (typeof window === "undefined") return null;
   const v = window.localStorage.getItem(THEME_KEY);
-  return v === "light" || v === "dark" ? v : null;
+  return v === "dark" || v === "soft" || v === "light" ? v as Mode : null;
 }
 
-export function setStoredTheme(t: Theme) {
+export function setStoredMode(m: Mode) {
   if (typeof window === "undefined") return;
-  window.localStorage.setItem(THEME_KEY, t);
+  window.localStorage.setItem(THEME_KEY, m);
 }
 
-export function applyTheme(t: Theme) {
+export function applyMode(m: Mode, dir: Direction = "ember") {
   if (typeof document === "undefined") return;
-  document.documentElement.classList.toggle("dark", t === "dark");
+  const html = document.documentElement;
+  html.setAttribute("data-mode", m);
+  html.setAttribute("data-dir", dir);
+  // Keep .dark class in sync for backward compat with studio pages
+  html.classList.toggle("dark", m === "dark");
 }
 
-export function resolveInitialTheme(): Theme {
-  const stored = getStoredTheme();
-  if (stored) return stored;
-  if (typeof window !== "undefined" && window.matchMedia("(prefers-color-scheme: dark)").matches) return "dark";
-  return "dark"; // app's default identity is dark
+export function nextMode(current: Mode): Mode {
+  const cycle: Mode[] = ["soft", "dark", "light"];
+  return cycle[(cycle.indexOf(current) + 1) % cycle.length];
 }
+
+export function resolveInitialMode(): Mode {
+  const stored = getStoredMode();
+  if (stored) return stored;
+  // Default: soft (warm paper, easy on the eyes)
+  return "soft";
+}
+
+// Legacy compat — old code called these
+export type Theme = Mode;
+export const getStoredTheme = getStoredMode;
+export const setStoredTheme = setStoredMode;
+export function applyTheme(t: Mode) { applyMode(t); }

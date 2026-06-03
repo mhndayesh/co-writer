@@ -10,6 +10,7 @@ import logging
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.prompt_safety import SECURITY_CLAUSE, fence
 from app.db.models import Chapter, ContinuityReport, User
 from app.db.schemas import CheckFinding, RevisionPass, StoryCheckResponse
 from app.services import llm_service, rag_service
@@ -80,14 +81,16 @@ async def check(
         if chapter is not None
         else "TARGET: Manuscript-wide pass. Use the full STORY CONTEXT and stored scene/revelation data."
     )
+    # Fence author-controlled context + target so embedded "instructions" in the
+    # manuscript can't hijack the review (consistent with the other AI surfaces).
     user_msg = (
         f"REVISION PASS: {pass_type}\n"
         f"PASS FOCUS: {PASS_GUIDANCE[pass_type]}\n\n"
-        f"STORY CONTEXT:\n{ctx}\n\n{target}"
+        f"STORY CONTEXT:\n{fence('story_context', ctx)}\n\n{fence('author_draft', target)}"
     )
     resp, fb = await llm_service.run(
-        db, user, page=f"story_check.{pass_type}", system=SYSTEM, user_msg=user_msg,
-        json_mode=True, temperature=0.3, max_tokens=None, story_id=story_id,
+        db, user, page=f"story_check.{pass_type}", system=SYSTEM + "\n\n" + SECURITY_CLAUSE, user_msg=user_msg,
+        json_mode=True, temperature=0.3, max_tokens=32000, story_id=story_id,
     )
     parsed = llm_service.parse_json(resp.text) or {}
     if not isinstance(parsed, dict):

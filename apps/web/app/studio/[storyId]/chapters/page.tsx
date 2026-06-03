@@ -1,17 +1,21 @@
 "use client";
 import { useParams } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Plus, Trash2, Sparkles } from "lucide-react";
+import { Plus, Sparkles, StopCircle, Trash2 } from "lucide-react";
 import * as api from "@/lib/api";
-import { Btn, Card, FG, Inp, PageHdr, Ta, Tag } from "@/components/ui/Primitives";
+import { Btn, Card, FG, Inp, PageHdr, QueryError, Ta, Tag } from "@/components/ui/Primitives";
+import { CoverUploader } from "@/components/ui/CoverUploader";
 import { useDebouncedSave } from "@/lib/debounce";
+import { AiLockNotice } from "@/components/billing/AiLockNotice";
+import { useEntitlement } from "@/lib/useEntitlement";
 
 export default function ChaptersPage() {
   const { storyId } = useParams<{ storyId: string }>();
   const qc = useQueryClient();
+  const { aiAvailable } = useEntitlement();
 
-  const { data: chapters } = useQuery({ queryKey: ["chapters", storyId], queryFn: () => api.listChapters(storyId) });
+  const { data: chapters, isError: chaptersError, error: chaptersErr, refetch: refetchChapters } = useQuery({ queryKey: ["chapters", storyId], queryFn: () => api.listChapters(storyId) });
   const { data: characters } = useQuery({ queryKey: ["characters", storyId], queryFn: () => api.listCharacters(storyId) });
   const { data: locations } = useQuery({ queryKey: ["locations", storyId], queryFn: () => api.listLocations(storyId) });
   const { data: scenes } = useQuery({ queryKey: ["scenes", storyId], queryFn: () => api.listScenes(storyId) });
@@ -60,23 +64,76 @@ export default function ChaptersPage() {
     patch.mutate(patchable);
   });
 
-  // Writing Companion
+  // ── Writing Companion (streaming) ───────────────────────────────────────────
   const [instruction, setInstruction] = useState("");
+  // Live tokens accumulate here; shown immediately as they stream in.
+  const [streamText, setStreamText] = useState("");
+  // AbortController so the user can stop a long stream.
+  const abortRef = useRef<AbortController | null>(null);
+
+  // Not tagged ["llm", …] so BusyOverlay doesn't block the page — the user can
+  // read the tokens as they arrive. Gate errors (402/429/byok) still reach the
+  // global MutationCache.onError → UpgradeModal via api.ApiError instanceof check.
   const companion = useMutation({
-    mutationKey: ["llm", "flow.companion"],
-    mutationFn: (text: string) => api.writingCompanion(storyId, text, activeId || undefined),
+    mutationKey: ["companion-stream", storyId],
+    mutationFn: async (text: string) => {
+      setStreamText("");
+      const ctrl = new AbortController();
+      abortRef.current = ctrl;
+      let accumulated = "";
+      try {
+        await api.writingCompanionStream(storyId, text, (delta) => {
+          accumulated += delta;
+          setStreamText(accumulated);
+        }, activeId || undefined, ctrl.signal);
+      } finally {
+        abortRef.current = null;
+      }
+      return accumulated;
+    },
   });
+
+  function stopStream() {
+    abortRef.current?.abort();
+    // Mark mutation as settled so the card reflects the partial result.
+    companion.reset();
+  }
 
   function insertDraftAtEnd(text: string) {
     if (!draft) return;
     setDraft({ ...draft, content: (draft.content ? draft.content + "\n\n" : "") + text });
   }
 
+  function resetCompanion() {
+    stopStream();
+    setStreamText("");
+    companion.reset();
+    setInstruction("");
+  }
+
+  // Switching chapters must discard any in-flight / streamed companion draft and
+  // its instruction — otherwise you could Insert the PREVIOUS chapter's generated
+  // text into the chapter you just opened.
+  useEffect(() => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    setStreamText("");
+    setInstruction("");
+    companion.reset();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeId]);
+
+  // Text to show: prefer live streamText (non-empty); fall back to final mutation
+  // result in case the component re-renders after streaming finishes.
+  const displayText = streamText || (typeof companion.data === "string" ? companion.data : "");
+  const isStreaming = companion.isPending;
+
   return (
-    <div className="grid grid-cols-[260px_1fr] gap-6 max-w-7xl">
+    <div className="grid grid-cols-1 lg:grid-cols-[260px_1fr] gap-4 lg:gap-6 max-w-7xl">
       <aside>
         <PageHdr title="❧ Chapters" />
         <Btn variant="primary" className="w-full mb-3" onClick={() => create.mutate()}><Plus size={14}/> New chapter</Btn>
+        {chaptersError && <div className="mb-3"><QueryError error={chaptersErr} retry={refetchChapters} what="your chapters" /></div>}
         <ul className="space-y-1">
           {(chapters || []).map((c: any) => (
             <li key={c.id}>
@@ -122,6 +179,15 @@ export default function ChaptersPage() {
                 </FG>
                 <FG label="Summary"><Inp value={draft.summary || ""} onChange={e => setDraft({ ...draft, summary: e.target.value })} /></FG>
               </div>
+              <div className="mt-3 border-t border-ink-border pt-3">
+                <CoverUploader
+                  value={draft.cover_image_url}
+                  onChange={(url) => setDraft({ ...draft, cover_image_url: url })}
+                  label="Chapter cover (optional)"
+                  aspect="16 / 9"
+                  width={120}
+                />
+              </div>
             </Card>
 
             <Card className="mb-4">
@@ -160,22 +226,65 @@ export default function ChaptersPage() {
             <Card>
               <h3 className="font-display text-lg mb-2">Writing Companion</h3>
               <p className="text-sm text-ink-text2 mb-3">Describe a scene — the AI drafts it using the full story context (Graph-RAG).</p>
-              <Ta rows={3} value={instruction} onChange={e => setInstruction(e.target.value)} placeholder="e.g. The reunion in the throne room, Mira confronts Aiden about the broken pact." />
-              <div className="flex justify-end mt-2">
-                <Btn variant="primary" disabled={!instruction.trim() || companion.isPending} onClick={() => companion.mutate(instruction)}>
-                  <Sparkles size={14}/> {companion.isPending ? "Drafting…" : "Draft scene"}
-                </Btn>
+              <AiLockNotice />
+              <Ta
+                rows={3}
+                value={instruction}
+                onChange={e => setInstruction(e.target.value)}
+                placeholder="e.g. The reunion in the throne room, Mira confronts Aiden about the broken pact."
+                disabled={isStreaming}
+              />
+              <div className="flex justify-end mt-2 gap-2">
+                {isStreaming ? (
+                  <Btn variant="ghost" onClick={stopStream}>
+                    <StopCircle size={14}/> Stop
+                  </Btn>
+                ) : (
+                  <Btn
+                    variant="primary"
+                    disabled={!instruction.trim() || !aiAvailable}
+                    onClick={() => companion.mutate(instruction)}
+                  >
+                    <Sparkles size={14}/> Draft scene
+                  </Btn>
+                )}
               </div>
-              {companion.data && (
+
+              {/* Streaming output — appears as soon as the first token arrives */}
+              {displayText && (
                 <div className="mt-4 border-t border-ink-border pt-4">
-                  <p className="text-xs uppercase tracking-wider text-ink-text2 mb-2">Draft</p>
-                  <pre className="whitespace-pre-wrap leading-relaxed text-sm text-ink-text">{companion.data.draft}</pre>
-                  <div className="flex justify-end mt-2">
-                    <Btn variant="primary" onClick={() => { insertDraftAtEnd(companion.data!.draft); companion.reset(); setInstruction(""); }}>
-                      Insert into chapter
-                    </Btn>
+                  <div className="flex items-center gap-2 mb-2">
+                    <p className="text-xs uppercase tracking-wider text-ink-text2">Draft</p>
+                    {isStreaming && (
+                      <span className="text-xs text-ink-text3 flex items-center gap-1">
+                        <span className="inline-block w-1.5 h-3.5 bg-ink-gold/70 rounded-sm animate-pulse" />
+                        Streaming…
+                      </span>
+                    )}
                   </div>
+                  <pre className="whitespace-pre-wrap leading-relaxed text-sm text-ink-text">{displayText}</pre>
+                  {!isStreaming && (
+                    <div className="flex justify-end gap-2 mt-3">
+                      <Btn variant="ghost" onClick={resetCompanion}>Discard</Btn>
+                      <Btn variant="primary" onClick={() => { insertDraftAtEnd(displayText); resetCompanion(); }}>
+                        Insert into chapter
+                      </Btn>
+                    </div>
+                  )}
                 </div>
+              )}
+
+              {/* Surface a stream failure / empty result — a transient error
+                  otherwise looks identical to "I never clicked Draft". */}
+              {!isStreaming && companion.isError && (
+                <p className="mt-3 text-sm text-ink-red">
+                  {companion.error instanceof Error ? companion.error.message : "The draft failed to generate."} — please try again.
+                </p>
+              )}
+              {!isStreaming && companion.isSuccess && !displayText && (
+                <p className="mt-3 text-sm text-ink-text3">
+                  The model returned nothing. Try rephrasing your instruction, or check your AI model in Settings.
+                </p>
               )}
             </Card>
           </>

@@ -1,4 +1,4 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 from sqlalchemy import func, select
 
 from app.core.deps import CurrentUser, DB, get_user_story
@@ -22,8 +22,16 @@ async def _story_out(db, story: Story) -> dict:
 
 
 @router.get("")
-async def list_stories(user: CurrentUser, db: DB):
-    rows = (await db.execute(select(Story).where(Story.user_id == user.id).order_by(Story.updated_at.desc()))).scalars().all()
+async def list_stories(
+    user: CurrentUser,
+    db: DB,
+    limit: int | None = Query(None, ge=1, le=200, description="Opt-in page size; omit to return all."),
+    offset: int = Query(0, ge=0),
+):
+    stmt = select(Story).where(Story.user_id == user.id).order_by(Story.updated_at.desc())
+    if limit is not None:
+        stmt = stmt.offset(offset).limit(limit)
+    rows = (await db.execute(stmt)).scalars().all()
     out = [await _story_out(db, s) for s in rows]
     return envelope_ok({"stories": out})
 

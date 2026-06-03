@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import re
 import textwrap
+from typing import AsyncIterator
 
 from app.services.llm.base import ChatResponse, LLMProvider, Message
 
@@ -107,6 +108,21 @@ class FallbackProvider(LLMProvider):
             model="fallback-stub",
         )
 
+    async def stream(
+        self,
+        messages: list[Message],
+        *,
+        model: str | None = None,
+        temperature: float = 0.7,
+        max_tokens: int | None = None,
+    ) -> AsyncIterator[str]:
+        # Deterministic: produce the full fallback text, then emit it in small
+        # slices so a streaming client still sees incremental output.
+        resp = await self.chat(messages, temperature=temperature, max_tokens=max_tokens)
+        text = resp.text
+        for i in range(0, len(text), 40):
+            yield text[i:i + 40]
+
     async def embed(self, texts: list[str], *, model: str | None = None) -> list[list[float]]:
         # Deterministic 16-dim hash embedding so Qdrant write succeeds.
         out: list[list[float]] = []
@@ -120,3 +136,6 @@ class FallbackProvider(LLMProvider):
 
     async def ping(self) -> tuple[bool, str]:
         return True, "fallback"
+
+    async def list_models(self) -> list[dict]:
+        return []

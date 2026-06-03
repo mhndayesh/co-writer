@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Literal, Protocol
+from typing import AsyncIterator, Literal, Protocol
 
 Role = Literal["system", "user", "assistant"]
 
@@ -36,6 +36,24 @@ class LLMProvider(Protocol):
         max_tokens: int | None = None,
     ) -> ChatResponse: ...
 
+    def stream(
+        self,
+        messages: list[Message],
+        *,
+        model: str | None = None,
+        temperature: float = 0.7,
+        max_tokens: int | None = None,
+    ) -> AsyncIterator[str]:
+        """Yield text deltas as they arrive. (Prose/chat use; no json_mode.)"""
+        ...
+
     async def embed(self, texts: list[str], *, model: str | None = None) -> list[list[float]]: ...
 
     async def ping(self) -> tuple[bool, str]: ...
+
+    async def list_models(self) -> list[dict]:
+        """Return the models the provider exposes, each as
+        ``{"id": str, "label": str, "kind": "chat"|"embed"}`` — so the Settings
+        UI can offer a real picker instead of free-text. Raises on auth/transport
+        failure (the caller turns that into a friendly message)."""
+        ...

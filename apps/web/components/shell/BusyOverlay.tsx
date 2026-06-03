@@ -16,6 +16,13 @@ const LABELS: Record<string, string> = {
   "rag.preview": "Retrieving graph context…",
   "rag.reindex": "Re-indexing story vectors…",
   "graph.reproject": "Re-projecting the graph…",
+  "voice.analyze": "Reading the sample for voice traits…",
+  "voice.interview": "Building the character profile…",
+  "voice.place": "Sensing the place…",
+  "voice.observe": "Listening for off-key lines…",
+  "voice.rewrite": "Rewriting in character…",
+  "voice.evolve": "Noticing what changed…",
+  "voice.compare": "Putting voices side by side…",
 };
 
 const HINTS: Record<string, string> = {
@@ -26,6 +33,13 @@ const HINTS: Record<string, string> = {
   "flow.approve": "Adding new entities to your story and snapshotting the version.",
   "flow.companion": "The Writing Companion is drafting using the full story context.",
   "story-check": "Cross-checking against your world bible, cast, and prior chapters.",
+  "voice.analyze": "Extracting personality, behavior and speech traits — each with a confidence score for you to approve.",
+  "voice.interview": "Synthesizing a readable profile and structured layers from your answers.",
+  "voice.place": "Turning your answers into a sensory, atmospheric place profile.",
+  "voice.observe": "Checking each line against the character's identity, masks and state.",
+  "voice.rewrite": "Rewriting the dialogue to match voice, masks and current state.",
+  "voice.evolve": "Spotting what this scene reveals or changes about the cast.",
+  "voice.compare": "Generating each character's response to the same situation.",
 };
 
 export function BusyOverlay() {

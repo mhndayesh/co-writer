@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+from typing import AsyncIterator
+
 import httpx
 
 from app.services.llm.base import ChatResponse, LLMProvider, Message
@@ -66,10 +69,70 @@ class AnthropicProvider(LLMProvider):
             raw=data,
         )
 
+    async def stream(
+        self,
+        messages: list[Message],
+        *,
+        model: str | None = None,
+        temperature: float = 0.7,
+        max_tokens: int | None = None,
+    ) -> AsyncIterator[str]:
+        system_chunks = [m.content for m in messages if m.role == "system"]
+        non_system = [{"role": m.role, "content": m.content} for m in messages if m.role != "system"]
+        body = {
+            "model": model or self.default_model,
+            "messages": non_system,
+            "max_tokens": max_tokens if (max_tokens and max_tokens > 0) else 16000,
+            "temperature": temperature,
+            "stream": True,
+        }
+        sys_text = "\n\n".join(system_chunks).strip()
+        if sys_text:
+            body["system"] = sys_text
+
+        async with httpx.AsyncClient(timeout=180) as client:
+            async with client.stream(
+                "POST", "https://api.anthropic.com/v1/messages", json=body, headers=self._headers()
+            ) as r:
+                r.raise_for_status()
+                async for line in r.aiter_lines():
+                    if not line.startswith("data:"):
+                        continue
+                    data = line[len("data:"):].strip()
+                    if not data:
+                        continue
+                    try:
+                        obj = json.loads(data)
+                    except Exception:
+                        continue
+                    if obj.get("type") == "content_block_delta":
+                        piece = (obj.get("delta") or {}).get("text") or ""
+                        if piece:
+                            yield piece
+
     async def embed(self, texts: list[str], *, model: str | None = None) -> list[list[float]]:
         if self._fallback_embed_provider is None:
             raise RuntimeError("Anthropic has no embeddings API; configure a sibling embed provider")
         return await self._fallback_embed_provider.embed(texts, model=model)
+
+    async def list_models(self) -> list[dict]:
+        """List models from Anthropic's native /v1/models (needs x-api-key +
+        anthropic-version). Anthropic has no embeddings, so all are chat."""
+        if not self.api_key:
+            raise RuntimeError("missing API key")
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.get(
+                "https://api.anthropic.com/v1/models?limit=100", headers=self._headers()
+            )
+            r.raise_for_status()
+            data = r.json() or {}
+        out: list[dict] = []
+        for it in (data.get("data") or []):
+            mid = it.get("id")
+            if not mid:
+                continue
+            out.append({"id": mid, "label": it.get("display_name") or mid, "kind": "chat"})
+        return out
 
     async def ping(self) -> tuple[bool, str]:
         if not self.api_key:

@@ -18,7 +18,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import Character, User
 from app.services import embedding_service, graph_service
-from app.services.llm.factory import get_embedding_provider
 
 log = logging.getLogger("gink.rag")
 
@@ -33,12 +32,12 @@ async def retrieve_context_block(
     hops: int = 1,
 ) -> str:
     """Build a structured context block from vector hits + graph subgraphs."""
-    provider = await get_embedding_provider(db, user)
+    from app.services import llm_service
 
-    # 1) Embed query
+    # 1) Embed query (metered when house-paid; BYOK uses the user's own embedder)
     chunks: list[dict] = []
     try:
-        qvec = (await provider.embed([query]))[0]
+        qvec = (await llm_service.embed(db, user, [query], story_id=story_id))[0]
         chunks = await embedding_service.search(story_id, qvec, top_k=top_k_chunks)
     except Exception as e:
         log.debug("rag embed/search failed: %s", e)
@@ -76,6 +75,8 @@ async def retrieve_context_block(
                 label = f"Ch{c.get('number','?')}. {c.get('title','')}"
             elif kind == "character":
                 label = f"Character: {c.get('name','')}"
+            elif kind == "scene":
+                label = "Scene: " + (c.get("title") or f"#{c.get('ordinal', '')}")
             txt = (c.get("text", "") or "")[:500]
             parts.append(f"- ({kind}) {label} — {txt}")
 

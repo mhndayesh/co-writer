@@ -41,6 +41,37 @@ class Conflict(AppError):
         super().__init__(message, status_code=status.HTTP_409_CONFLICT, details=details)
 
 
+class BadRequest(AppError):
+    code = "bad_request"
+
+    def __init__(self, message: str = "Bad request", details: Any = None):
+        super().__init__(message, status_code=status.HTTP_400_BAD_REQUEST, details=details)
+
+
+class PaymentRequired(AppError):
+    """Feature needs a paid subscription the user doesn't have (402)."""
+    code = "subscription_required"
+
+    def __init__(self, message: str = "A subscription is required", details: Any = None):
+        super().__init__(message, status_code=status.HTTP_402_PAYMENT_REQUIRED, details=details)
+
+
+class QuotaExceeded(AppError):
+    """The user's plan usage limit for the current period is reached (429)."""
+    code = "quota_exceeded"
+
+    def __init__(self, message: str = "Usage limit reached", details: Any = None):
+        super().__init__(message, status_code=status.HTTP_429_TOO_MANY_REQUESTS, details=details)
+
+
+class ByokKeyMissing(AppError):
+    """A BYOK user tried to run AI without configuring their own API key (400)."""
+    code = "byok_key_missing"
+
+    def __init__(self, message: str = "Add your own API key in Settings to use AI", details: Any = None):
+        super().__init__(message, status_code=status.HTTP_400_BAD_REQUEST, details=details)
+
+
 def envelope_ok(data: Any) -> dict:
     return {"ok": True, "data": data}
 

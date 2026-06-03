@@ -1,4 +1,4 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 from sqlalchemy import select
 
 from app.core.deps import CurrentUser, DB, get_user_story
@@ -10,9 +10,18 @@ router = APIRouter()
 
 
 @router.get("/{story_id}/characters")
-async def list_characters(story_id: str, user: CurrentUser, db: DB):
+async def list_characters(
+    story_id: str,
+    user: CurrentUser,
+    db: DB,
+    limit: int | None = Query(None, ge=1, le=500, description="Opt-in page size; omit to return all."),
+    offset: int = Query(0, ge=0),
+):
     await get_user_story(story_id, user, db)
-    rows = (await db.execute(select(Character).where(Character.story_id == story_id).order_by(Character.created_at))).scalars().all()
+    stmt = select(Character).where(Character.story_id == story_id).order_by(Character.created_at)
+    if limit is not None:
+        stmt = stmt.offset(offset).limit(limit)
+    rows = (await db.execute(stmt)).scalars().all()
     return envelope_ok({"characters": [CharacterOut.model_validate(c).model_dump() for c in rows]})
 
 
@@ -65,14 +74,28 @@ async def list_relationships(story_id: str, character_id: str, user: CurrentUser
 @router.post("/{story_id}/characters/{character_id}/relationships")
 async def add_relationship(story_id: str, character_id: str, payload: RelationshipIn, user: CurrentUser, db: DB):
     await get_user_story(story_id, user, db)
-    rel = CharacterRelationship(
-        story_id=story_id,
-        source_id=character_id,
-        target_id=payload.target_id,
-        type=payload.type,
-        description=payload.description,
-    )
-    db.add(rel)
+    # Upsert on the (story, source, target) invariant — re-posting an existing edge
+    # updates it in place instead of tripping the unique constraint, mirroring how
+    # Flow approve() reconciles relationships.
+    rel = (await db.execute(
+        select(CharacterRelationship).where(
+            CharacterRelationship.story_id == story_id,
+            CharacterRelationship.source_id == character_id,
+            CharacterRelationship.target_id == payload.target_id,
+        )
+    )).scalar_one_or_none()
+    if rel is None:
+        rel = CharacterRelationship(
+            story_id=story_id,
+            source_id=character_id,
+            target_id=payload.target_id,
+            type=payload.type,
+            description=payload.description,
+        )
+        db.add(rel)
+    else:
+        rel.type = payload.type
+        rel.description = payload.description
     await db.commit()
     await db.refresh(rel)
     return envelope_ok({"relationship": RelationshipOut.model_validate(rel).model_dump()})

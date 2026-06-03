@@ -201,6 +201,17 @@ async def test_llm_settings_roundtrip(client):
     r = await client.post("/v1/auth/signup", json={"email": "ll@example.com", "password": "password1", "display_name": "L"})
     H = {"Authorization": f"Bearer {r.json()['data']['tokens']['access_token']}"}
 
+    # Choosing your own AI provider is a BYOK-plan feature now; upgrade this user
+    # so the config round-trip is allowed (free/dev_ai are blocked by design).
+    from app.core import plans
+    from app.db.models import User
+    from app.db.session import SessionLocal
+    from app.services import billing_service
+    async with SessionLocal() as db:
+        u = await db.get(User, r.json()["data"]["user"]["id"])
+        await billing_service.set_plan(db, u, plans.BYOK, status=plans.STATUS_ACTIVE)
+        await db.commit()
+
     # Save settings
     lane = {
         "provider": "openai",

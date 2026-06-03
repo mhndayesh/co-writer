@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 
 class APIResponse(BaseModel):
@@ -36,9 +36,53 @@ class UserOut(BaseModel):
     email: EmailStr
     display_name: str
     created_at: datetime
+    plan_tier: str = "free"
+    plan_status: str = "none"
+    is_admin: bool = False
+
+
+# ── Billing / subscriptions ───────────────────────────────────────────────
+
+class CheckoutRequest(BaseModel):
+    tier: Literal["dev_ai", "byok"]
+    success_url: str | None = None
+    cancel_url: str | None = None
+
+
+class SetPlanRequest(BaseModel):
+    tier: Literal["free", "dev_ai", "byok"]
+    status: str | None = None
+
+
+class CreateCodeRequest(BaseModel):
+    tier: Literal["dev_ai", "byok"]
+    duration_days: int | None = None   # null = lifetime
+    max_uses: int | None = None        # null = unlimited
+    note: str = Field(default="", max_length=200)
+    code: str | None = None            # custom code; blank → auto-generate
+
+
+class RedeemCodeRequest(BaseModel):
+    code: str = Field(min_length=1, max_length=64)
 
 
 # ── Stories ─────────────────────────────────────────────────────────────
+
+def _validate_cover_url(v: str | None) -> str | None:
+    """Allow http(s) URLs or same-origin uploaded paths (/v1/media/…); block
+    javascript:/data:/file:/protocol-relative // — these render into <img src>."""
+    if v is None:
+        return v
+    s = v.strip()
+    if not s:
+        return None
+    is_same_origin = s.startswith("/") and not s.startswith("//")
+    if not (is_same_origin or s.lower().startswith(("http://", "https://"))):
+        raise ValueError("cover_image_url must be an http(s) URL or an uploaded path")
+    if len(s) > 2048:
+        raise ValueError("cover_image_url is too long")
+    return s
+
 
 class StoryCreate(BaseModel):
     title: str = "Untitled"
@@ -50,6 +94,9 @@ class StoryUpdate(BaseModel):
     title: str | None = None
     genre: str | None = None
     palette_idx: int | None = None
+    cover_image_url: str | None = None
+
+    _v_cover = field_validator("cover_image_url")(_validate_cover_url)
 
 
 class StoryStats(BaseModel):
@@ -64,6 +111,7 @@ class StoryOut(BaseModel):
     title: str
     genre: str
     palette_idx: int
+    cover_image_url: str | None = None
     graph_status: str
     created_at: datetime
     updated_at: datetime
@@ -146,6 +194,239 @@ class RelationshipOut(RelationshipIn):
     source_id: str
 
 
+# ── Character Voice Studio (Narrative Fidelity Engine) ────────────────────
+
+class IdentityLayerPatch(BaseModel):
+    """Replace one identity layer (core|behavioral|voice). The payload shape is
+    intentionally free-form — the layers evolve faster than a strict schema."""
+    payload: dict = {}
+    build_method: str | None = None
+
+
+class IdentityOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    story_id: str
+    character_id: str
+    core_personality: dict = {}
+    behavioral_patterns: dict = {}
+    voice_fingerprint: dict = {}
+    short_profile: str = ""
+    build_method: str = ""
+    completeness: dict = {}
+    updated_at: datetime | None = None
+
+
+class MaskIn(BaseModel):
+    audience_character_id: str | None = None
+    audience_label: str = ""
+    speech_style: str = ""
+    tells: str = ""
+    notes: str = ""
+
+
+class MaskOut(MaskIn):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    character_id: str
+
+
+class StateIn(BaseModel):
+    label: str = ""
+    detail: str = ""
+    kind: str = "temporary"  # temporary|recurring|arc
+    chapter_id: str | None = None
+    active: bool = True
+
+
+class StateOut(StateIn):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    character_id: str
+
+
+class IdentityVersionOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    character_id: str
+    version_no: int
+    kind: str
+    snapshot: dict = {}
+    note: str = ""
+    chapter_id: str | None = None
+    created_at: datetime
+
+
+# Method 1 — analyze existing writing. Provide pasted `text` and/or pick
+# `chapter_ids` to analyze; the server assembles the sample under a char budget.
+class AnalyzeWritingRequest(BaseModel):
+    text: str = Field(default="", max_length=200_000)
+    chapter_ids: list[str] = []
+
+
+class TraitProposal(BaseModel):
+    layer: str = ""            # core|behavioral|voice
+    field: str = ""           # the key within that layer
+    value: Any = ""
+    confidence: float = 0.0   # 0-1
+    excerpts: list[str] = []
+    status: str = "proposed"
+
+
+class AnalyzeWritingResponse(BaseModel):
+    traits: list[TraitProposal] = []
+    representative_dialogue: list[str] = []
+    uncertain_areas: list[str] = []
+    fallback: bool = False
+
+
+class TraitDecision(BaseModel):
+    layer: str
+    field: str
+    value: Any = ""
+    decision: str = "approve"  # approve|edit|reject (edit carries an updated value)
+
+
+class ApproveTraitsRequest(BaseModel):
+    decisions: list[TraitDecision] = []
+
+
+# Method 2 — guided interview
+class InterviewSubmitRequest(BaseModel):
+    answers: dict = {}          # {question_id: answer}
+    tier: str = "quick"
+
+
+# Place Identity (Part 1C)
+class PlaceIdentityPatch(BaseModel):
+    purpose: str | None = None
+    atmosphere: str | None = None
+    sensory_palette: dict | None = None
+    visual_anchors: list[Any] | None = None
+    spatial_layout: str | None = None
+    controls_space: str | None = None
+    social_rules: str | None = None
+    normal_behavior: str | None = None
+    variations: dict | None = None
+    symbolic_motif: str | None = None
+
+
+class PlaceIdentityOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    location_id: str
+    purpose: str = ""
+    atmosphere: str = ""
+    sensory_palette: dict = {}
+    visual_anchors: list[Any] = []
+    spatial_layout: str = ""
+    controls_space: str = ""
+    social_rules: str = ""
+    normal_behavior: str = ""
+    variations: dict = {}
+    symbolic_motif: str = ""
+
+
+class PlaceBuildRequest(BaseModel):
+    answers: dict = {}
+
+
+# Observer + Dialogue Writer (Part 2)
+class ObserverCritiqueRequest(BaseModel):
+    draft: str = Field(min_length=1, max_length=200_000)
+    chapter_id: str | None = None
+    strictness: str = "balanced"  # light|balanced|strict
+
+
+class ObserverNote(BaseModel):
+    line: str = ""               # exact sentence copied from the draft
+    category: str = ""
+    severity: str = "low"        # high|medium|low
+    confidence: float = 0.0
+    message: str = ""
+    suggestion: str = ""
+    character_id: str | None = None
+    character: str = ""
+    fingerprint: str = ""        # server-computed; used by mark-intentional
+
+
+class ObserverCritiqueResponse(BaseModel):
+    notes: list[ObserverNote] = []
+    fallback: bool = False
+
+
+class RewriteRequest(BaseModel):
+    draft: str = Field(default="", max_length=200_000)
+    instruction: str = Field(default="", max_length=8_000)
+    participants: list[str] = []   # character ids
+    objective: str = Field(default="", max_length=8_000)
+    chapter_id: str | None = None
+    strictness: str = "balanced"
+
+
+class MarkIntentionalRequest(BaseModel):
+    line: str
+    note_kind: str = ""
+    reason: str = ""
+    chapter_id: str | None = None
+    character_id: str | None = None
+
+
+class UpdateProfileFromNoteRequest(BaseModel):
+    character_id: str
+    layer: str                   # core|behavioral|voice
+    field: str
+    value: Any = ""
+
+
+# Post-scene evolve
+class EvolveRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=200_000)
+    chapter_id: str | None = None
+
+
+class EvolveSuggestion(BaseModel):
+    type: str = ""               # new_phrase|revealed_fear|relationship_change|...
+    character: str = ""
+    character_id: str | None = None
+    summary: str = ""
+    suggested_save_as: str = "temporary"  # temporary|recurring|permanent|not_saved
+    excerpt: str = ""
+
+
+class EvolveResponse(BaseModel):
+    suggestions: list[EvolveSuggestion] = []
+    fallback: bool = False
+
+
+class EvolveDecision(BaseModel):
+    type: str = ""
+    character_id: str | None = None
+    summary: str = ""
+    save_as: str = "not_saved"   # temporary|recurring|permanent|not_saved
+
+
+class ApplyEvolveRequest(BaseModel):
+    decisions: list[EvolveDecision] = []
+
+
+# Voice comparison
+class CompareRequest(BaseModel):
+    character_ids: list[str] = Field(min_length=2)
+    situation: str = Field(min_length=1, max_length=8_000)
+
+
+class CompareEntry(BaseModel):
+    character_id: str = ""
+    character: str = ""
+    response: str = ""
+
+
+class CompareResponse(BaseModel):
+    entries: list[CompareEntry] = []
+    fallback: bool = False
+
+
 # ── Chapters ────────────────────────────────────────────────────────────
 
 class ChapterIn(BaseModel):
@@ -157,6 +438,9 @@ class ChapterIn(BaseModel):
     location_id: str | None = None
     character_ids: list[str] = []
     seeds: list[Any] = []
+    cover_image_url: str | None = None
+
+    _v_cover = field_validator("cover_image_url")(_validate_cover_url)
 
 
 class ChapterPatch(BaseModel):
@@ -168,6 +452,9 @@ class ChapterPatch(BaseModel):
     location_id: str | None = None
     character_ids: list[str] | None = None
     seeds: list[Any] | None = None
+    cover_image_url: str | None = None
+
+    _v_cover = field_validator("cover_image_url")(_validate_cover_url)
 
 
 class ChapterOut(BaseModel):
@@ -178,6 +465,7 @@ class ChapterOut(BaseModel):
     title: str
     content: str
     summary: str
+    cover_image_url: str | None = None
     pov_character_id: str | None
     location_id: str | None
     character_ids: list[str]
@@ -189,8 +477,12 @@ class ChapterOut(BaseModel):
 # ── Flow Writing ────────────────────────────────────────────────────────
 
 class FlowPolishRequest(BaseModel):
-    raw: str
-    notes: str = ""
+    raw: str = Field(max_length=200_000)
+    notes: str = Field(default="", max_length=8_000)
+    # Optional scene setup (Voice Studio): who/where the scene is, so their full
+    # identity is pinned in context. Empty → unchanged behavior.
+    scene_character_ids: list[str] = []
+    scene_location_id: str | None = None
 
 
 class FlowPolishResponse(BaseModel):
@@ -199,7 +491,7 @@ class FlowPolishResponse(BaseModel):
 
 
 class FlowExtractRequest(BaseModel):
-    polished: str
+    polished: str = Field(max_length=200_000)
 
 
 class ExtractedCharacter(BaseModel):
@@ -209,6 +501,11 @@ class ExtractedCharacter(BaseModel):
     status: str = ""       # alive|dead|unknown|missing|transformed — empty = no change
     arc_note: str = ""     # development observed in this scene — appended to character arc
     is_new: bool = True
+    # The LLM echoes back the exact [id:…] of an existing CAST member it's
+    # referring to. When present and valid it resolves the character
+    # unambiguously — the only safe way to disambiguate two same-named cast
+    # members. Server fills `existing_id` from it (or from a unique name match).
+    character_id: str | None = None
     existing_id: str | None = None
 
 
@@ -284,6 +581,8 @@ class FlowExtractResponse(BaseModel):
     factions: list[ExtractedFaction] = []
     threads: list[ExtractedThread] = []
     scenes: list[ExtractedScene] = []
+    world_rules: list[str] = []
+    world_lore: str = ""
     fallback: bool = False
 
 
@@ -315,7 +614,7 @@ class FlowApproveResponse(BaseModel):
 # ── Language Enhancer ───────────────────────────────────────────────────
 
 class FlowEnhanceRequest(BaseModel):
-    raw: str
+    raw: str = Field(max_length=200_000)
 
 
 class FlowEnhanceResponse(BaseModel):
@@ -329,7 +628,7 @@ class FlowEnhanceResponse(BaseModel):
 
 class CompanionRequest(BaseModel):
     chapter_id: str | None = None
-    instruction: str
+    instruction: str = Field(min_length=1, max_length=8_000)
 
 
 class CompanionResponse(BaseModel):
@@ -391,7 +690,7 @@ class GraphView(BaseModel):
 
 # ── LLM Settings ────────────────────────────────────────────────────────
 
-ProviderName = Literal["lmstudio", "openai", "anthropic", "openrouter", "gemini"]
+ProviderName = Literal["lmstudio", "openai", "anthropic", "openrouter", "gemini", "deepseek"]
 LaneName = Literal["creative", "technical", "embedding"]
 
 
@@ -401,6 +700,12 @@ class LaneConfigIn(BaseModel):
     model: str = ""
     embed_model: str = ""
     api_key: str = ""  # plaintext on the wire; blank = keep existing
+
+    @field_validator("base_url")
+    @classmethod
+    def _no_ssrf(cls, v: str) -> str:
+        from app.core.ssrf import validate_provider_base_url
+        return validate_provider_base_url(v)
 
 
 class LaneConfigOut(BaseModel):
@@ -429,6 +734,42 @@ class LLMStatus(BaseModel):
     reachable: bool
     detail: str = ""
     lane: str = "creative"
+
+
+# ── Owner control panel: shape-shift + house default + tunable caps ──────────
+
+class ActAsRequest(BaseModel):
+    # None or "owner" = exit test mode (real unlimited owner).
+    tier: Literal["free", "dev_ai", "byok", "owner"] | None = None
+
+
+class HouseConfigIn(BaseModel):
+    """The default AI every free + dev_ai user runs on. provider=None reverts to
+    the env default. base_url SSRF-validated like a normal lane."""
+    provider: ProviderName | None = None
+    base_url: str = ""
+    model: str = ""
+    embed_model: str = ""
+    api_key: str = ""  # plaintext on the wire; blank = keep the stored key
+
+    @field_validator("base_url")
+    @classmethod
+    def _no_ssrf(cls, v: str) -> str:
+        from app.core.ssrf import validate_provider_base_url
+        return validate_provider_base_url(v)
+
+
+class CapsIn(BaseModel):
+    # None = use the env default. >= 0 (0 means "blocked").
+    dev_ai_max_actions: int | None = Field(default=None, ge=0)
+    dev_ai_max_tokens: int | None = Field(default=None, ge=0)
+    free_trial_max_actions: int | None = Field(default=None, ge=0)
+    free_trial_max_tokens: int | None = Field(default=None, ge=0)
+
+
+class SiteConfigIn(BaseModel):
+    house: HouseConfigIn = Field(default_factory=HouseConfigIn)
+    caps: CapsIn = Field(default_factory=CapsIn)
 
 
 class ProviderInfo(BaseModel):

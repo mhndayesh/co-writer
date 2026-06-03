@@ -1,4 +1,4 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 from sqlalchemy import func, select
 
 from app.core.deps import CurrentUser, DB, get_user_story
@@ -10,9 +10,18 @@ router = APIRouter()
 
 
 @router.get("/{story_id}/chapters")
-async def list_chapters(story_id: str, user: CurrentUser, db: DB):
+async def list_chapters(
+    story_id: str,
+    user: CurrentUser,
+    db: DB,
+    limit: int | None = Query(None, ge=1, le=500, description="Opt-in page size; omit to return all."),
+    offset: int = Query(0, ge=0),
+):
     await get_user_story(story_id, user, db)
-    rows = (await db.execute(select(Chapter).where(Chapter.story_id == story_id).order_by(Chapter.number))).scalars().all()
+    stmt = select(Chapter).where(Chapter.story_id == story_id).order_by(Chapter.number)
+    if limit is not None:
+        stmt = stmt.offset(offset).limit(limit)
+    rows = (await db.execute(stmt)).scalars().all()
     return envelope_ok({"chapters": [ChapterOut.model_validate(c).model_dump(mode="json") for c in rows]})
 
 

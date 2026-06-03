@@ -67,6 +67,15 @@ PRESETS: dict[str, Preset] = {
         auth="bearer",
         can_embed=True,
     ),
+    "deepseek": Preset(
+        name="deepseek",
+        transport="openai",  # OpenAI-compatible API
+        base_url="https://api.deepseek.com/v1",
+        default_model="deepseek-v4-flash",
+        auth="bearer",
+        can_embed=False,  # no embeddings API → embedding lane falls back to local LM Studio
+        supports_response_format=True,  # JSON mode (response_format) is supported
+    ),
     "anthropic": Preset(
         name="anthropic",
         transport="anthropic",
